@@ -1,0 +1,60 @@
+name: Warm cache
+
+# Keeps the LiteSpeed + Cloudflare-Worker cache warm by crawling the site and
+# fetching each page (per country). Runs on a schedule and can be triggered
+# manually with custom options.
+#
+# Requires `kk-cache-warm.js` to exist in the repo (path set by SCRIPT below).
+
+on:
+  schedule:
+    # Every 6 hours (UTC). LiteSpeed holds pages ~1 week and the Worker edge ~1h,
+    # so re-warms are cheap (mostly KK=HIT). Change to '0 * * * *' for hourly.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      countries:
+        description: 'Countries: popular | all | comma list (e.g. IN,US,GB,AE)'
+        default: 'popular'
+        type: string
+      concurrency:
+        description: 'Parallel requests'
+        default: '8'
+        type: string
+      max:
+        description: 'Max pages to discover'
+        default: '5000'
+        type: string
+      base_url:
+        description: 'Site base URL'
+        default: 'https://kattankampany.com/'
+        type: string
+
+# Never let two warm runs overlap (a slow run + the next schedule).
+concurrency:
+  group: warm-cache
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90   # safety cap; 'popular' finishes well under this
+    env:
+      SCRIPT: kk-cache-warm.js          # adjust if you put the file in a subfolder
+      BASE_URL: ${{ github.event.inputs.base_url || 'https://kattankampany.com/' }}
+      COUNTRIES: ${{ github.event.inputs.countries || 'popular' }}
+      CONCURRENCY: ${{ github.event.inputs.concurrency || '8' }}
+      MAX: ${{ github.event.inputs.max || '5000' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Warm cache
+        run: |
+          echo "Warming $BASE_URL  countries=$COUNTRIES  concurrency=$CONCURRENCY  max=$MAX"
+          node "$SCRIPT" "$BASE_URL" --countries "$COUNTRIES" --concurrency "$CONCURRENCY" --max "$MAX"
