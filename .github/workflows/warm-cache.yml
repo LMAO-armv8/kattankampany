@@ -18,8 +18,8 @@ on:
         default: 'popular'
         type: string
       concurrency:
-        description: 'Parallel requests'
-        default: '8'
+        description: 'Parallel requests (keep low — shared hosting overloads easily)'
+        default: '2'
         type: string
       max:
         description: 'Max pages to discover'

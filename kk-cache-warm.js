@@ -35,8 +35,12 @@ const opt = (name, def) => {
 const BASE = argv.find((a) => /^https?:\/\//.test(a)) || 'https://kattankampany.com/';
 const ORIGIN = new URL(BASE).origin;
 const HOST = new URL(BASE).host;
-const CONCURRENCY = parseInt(opt('concurrency', '6'), 10);
-const DELAY_MS = parseInt(opt('delay', '0'), 10);
+// Gentle defaults — cold pages are heavy PHP renders on shared hosting, so keep
+// parallelism low and space requests out to avoid 508 / 429 / origin overload.
+const CONCURRENCY = parseInt(opt('concurrency', '2'), 10);
+const DELAY_MS = parseInt(opt('delay', '600'), 10);           // pause between requests per worker
+const REQUEST_TIMEOUT = parseInt(opt('timeout', '45000'), 10); // abort a hung request
+const MAX_RETRIES = parseInt(opt('retries', '4'), 10);         // retries on overload/timeout
 const MAX_PAGES = parseInt(opt('max', '5000'), 10);
 const USE_SITEMAP = !!opt('sitemap', false);
 const VERIFY = !!opt('verify', false);
@@ -99,22 +103,58 @@ function extractCountries(html) {
   return codes.length ? [...new Set(codes)] : null;
 }
 
+// ---- gentle throttling -----------------------------------------------------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let pausedUntil = 0;                 // global cooldown: all workers wait until this time
+function pauseAll(ms) { pausedUntil = Math.max(pausedUntil, Date.now() + ms); }
+async function waitIfPaused() { const d = pausedUntil - Date.now(); if (d > 0) await sleep(d); }
+// Statuses that mean "origin is overloaded / rate-limited" → back off, don't hammer.
+const OVERLOAD = new Set([429, 500, 502, 503, 504, 508, 520, 521, 522, 523, 524]);
+
 async function fetchOnce(url, country) {
   const headers = { Accept: 'text/html,application/xhtml+xml', 'User-Agent': UA };
   if (country) headers.Cookie = 'kk_wcpbc_country=' + country;
-  const t0 = Date.now();
-  const res = await fetch(url, { redirect: 'follow', headers });
-  const ms = Date.now() - t0;
-  // NOTE: through the Cloudflare Worker, `x-litespeed-cache` is a STALE header
-  // replayed from the Worker's cached copy — it does not reflect LiteSpeed's live
-  // state. `x-kk-html-cache` (the Worker's own HIT/MISS) is the meaningful one.
-  const kk = res.headers.get('x-kk-html-cache') || '-';
-  const cf = res.headers.get('cf-cache-status') || '-';
-  const ls = res.headers.get('x-litespeed-cache') || '-';
-  const ct = res.headers.get('content-type') || '';
-  let html = '';
-  if (ct.includes('text/html')) html = await res.text();
-  return { ms, status: res.status, ls, kk, cf, redirected: res.redirected, html };
+
+  for (let attempt = 0; ; attempt++) {
+    await waitIfPaused();
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT);
+    const t0 = Date.now();
+    try {
+      const res = await fetch(url, { redirect: 'follow', headers, signal: ctrl.signal });
+      clearTimeout(timer);
+      const ms = Date.now() - t0;
+
+      if (OVERLOAD.has(res.status)) {
+        const ra = parseInt(res.headers.get('retry-after') || '0', 10);
+        const backoff = ra > 0 ? ra * 1000 : Math.min(60000, 4000 * Math.pow(2, attempt));
+        pauseAll(backoff); // make EVERY worker cool down, not just this one
+        console.log(`  ⚠ ${res.status} overload on ${new URL(url).pathname} — backing off ${Math.round(backoff / 1000)}s`);
+        if (attempt < MAX_RETRIES) { await sleep(backoff); continue; }
+        return { ms, status: res.status, kk: '-', cf: '-', ls: '-', redirected: false, html: '', overloaded: true };
+      }
+
+      // NOTE: behind the Worker, `x-litespeed-cache` is a stale replayed header;
+      // `x-kk-html-cache` (Worker HIT/MISS) is the meaningful one.
+      const kk = res.headers.get('x-kk-html-cache') || '-';
+      const cf = res.headers.get('cf-cache-status') || '-';
+      const ls = res.headers.get('x-litespeed-cache') || '-';
+      const ct = res.headers.get('content-type') || '';
+      let html = '';
+      if (ct.includes('text/html')) html = await res.text();
+      return { ms, status: res.status, ls, kk, cf, redirected: res.redirected, html };
+    } catch (e) {
+      clearTimeout(timer);
+      const backoff = Math.min(60000, 4000 * Math.pow(2, attempt));
+      if (attempt < MAX_RETRIES) {
+        console.log(`  ⚠ ${e.name === 'AbortError' ? 'timeout' : e.message} on ${new URL(url).pathname} — retry in ${Math.round(backoff / 1000)}s`);
+        pauseAll(backoff);
+        await sleep(backoff);
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 
 // Generic bounded worker pool over an array of jobs.
