@@ -39,12 +39,12 @@ concurrency:
 jobs:
   warm:
     runs-on: ubuntu-latest
-    timeout-minutes: 90   # safety cap; 'popular' finishes well under this
+    timeout-minutes: 350   # GitHub-hosted runners are hard-capped at 360 min/job
     env:
       SCRIPT: kk-cache-warm.js          # adjust if you put the file in a subfolder
       BASE_URL: ${{ github.event.inputs.base_url || 'https://kattankampany.com/' }}
       COUNTRIES: ${{ github.event.inputs.countries || 'popular' }}
-      CONCURRENCY: ${{ github.event.inputs.concurrency || '8' }}
+      CONCURRENCY: ${{ github.event.inputs.concurrency || '2' }}
       MAX: ${{ github.event.inputs.max || '5000' }}
     steps:
       - name: Checkout
