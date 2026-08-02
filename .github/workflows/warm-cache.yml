@@ -8,9 +8,10 @@ name: Warm cache
 
 on:
   schedule:
-    # Every 6 hours (UTC). LiteSpeed holds pages ~1 week and the Worker edge ~1h,
-    # so re-warms are cheap (mostly KK=HIT). Change to '0 * * * *' for hourly.
-    - cron: '0 */6 * * *'
+    # Weekly — Sunday 12:00 IST (= 06:30 UTC; GitHub cron is UTC, IST = UTC+5:30).
+    # Matches LiteSpeed's ~1-week page-cache lifetime. Trigger manually any time
+    # via "Run workflow" below.
+    - cron: '30 6 * * 0'
   workflow_dispatch:
     inputs:
       countries:
