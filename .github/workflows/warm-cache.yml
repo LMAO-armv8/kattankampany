@@ -15,8 +15,8 @@ on:
   workflow_dispatch:
     inputs:
       countries:
-        description: 'Countries: kk | popular | all | comma list (e.g. IN,US,GB)'
-        default: 'kk'
+        description: 'Countries: zones | kk | popular | all | comma list'
+        default: 'zones'
         type: string
       concurrency:
         description: 'Parallel requests (keep low — shared hosting overloads easily)'
@@ -43,7 +43,7 @@ jobs:
     env:
       SCRIPT: kk-cache-warm.js          # adjust if you put the file in a subfolder
       BASE_URL: ${{ github.event.inputs.base_url || 'https://kattankampany.com/' }}
-      COUNTRIES: ${{ github.event.inputs.countries || 'kk' }}
+      COUNTRIES: ${{ github.event.inputs.countries || 'zones' }}
       CONCURRENCY: ${{ github.event.inputs.concurrency || '2' }}
       MAX: ${{ github.event.inputs.max || '5000' }}
     steps:

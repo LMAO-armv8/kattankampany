@@ -14,7 +14,8 @@
  *
  * Usage:
  *   node kk-cache-warm.js                        # crawl + warm default country only
- *   node kk-cache-warm.js --countries kk         # KK shipping markets (recommended)
+ *   node kk-cache-warm.js --countries zones      # 1 country per WCPBC pricing zone (recommended)
+ *   node kk-cache-warm.js --countries kk         # KK shipping markets (~42)
  *   node kk-cache-warm.js --countries popular    # 11 high-traffic presets
  *   node kk-cache-warm.js --countries all        # every switcher country (slow)
  *   node kk-cache-warm.js --countries IN,US,GB,AE
@@ -43,17 +44,60 @@ const MAX_RETRIES = parseInt(opt('retries', '4'), 10);         // retries on ove
 const MAX_PAGES = parseInt(opt('max', '5000'), 10);
 const USE_SITEMAP = !!opt('sitemap', false);
 const VERIFY = !!opt('verify', false);
-const COUNTRIES_ARG = opt('countries', false); // false | true | 'all' | 'popular' | 'kk' | 'IN,US,...'
-const UA = 'KK-CacheWarmer/1.2 (+cache warmup)';
+const COUNTRIES_ARG = opt('countries', false); // false | true | 'all' | 'popular' | 'kk' | 'zones' | 'IN,US,...'
+const UA = 'KK-CacheWarmer/1.3 (+cache warmup)';
 
 const POPULAR = ['IN', 'US', 'GB', 'CA', 'AU', 'SG', 'DE', 'AE', 'QA', 'SA', 'CH'];
 
-// Markets KK ships to (your reduced list). Use --countries kk (default in Actions).
-// "Other Europe" / "Rest of World" zone countries self-warm on first visit.
+// Markets KK ships to (traffic list). Use --countries kk.
 const KK_LIST = [
   'CA','IN','US','GB','DE','AU','NL','AE','SA','SG','QA','OM','BH','JO','KW','MY',
   'NZ','SE','FR','AT','CZ','PL','CH','MT','HU','JP','ZA','IE','FI','ID','HR','ES',
   'PT','IT','NO','DK','BE','TH','FJ','MV','GP','RE'
+];
+
+/**
+ * One representative country per WCPBC pricing zone (from pricing_zones.csv).
+ * 35 warm requests cover every price variant. Use --countries zones (Actions default).
+ * NOTE: Worker cache is still keyed by country — a zone warm covers that country only.
+ * Other countries in the same zone still cold-start once (same prices, separate cache key).
+ */
+const ZONE_REPS = [
+  'IN', // India
+  'CA', // Canada
+  'US', // USA
+  'GB', // UK
+  'AE', // UAE
+  'QA', // Qatar
+  'SA', // Saudi Arabia
+  'AU', // Australia
+  'SG', // Singapore
+  'BH', // Bahrain
+  'MY', // Malaysia
+  'NZ', // New Zealand
+  'OM', // Oman
+  'KW', // Kuwait
+  'GP', // Europe zone 11 (EUR group)
+  'MV', // Zone 1 (BD,BT,MV,NP,LK)
+  'CZ', // Czech Republic
+  'SE', // Sweden
+  'NO', // Norway
+  'JP', // Japan
+  'PL', // Poland
+  'DK', // Denmark
+  'HU', // Hungary
+  'TH', // Zone 2 (HK,TH)
+  'CN', // Zone 3
+  'JO', // Zone 4 (JO,PK)
+  'ID', // Zone 5 (SE Asia)
+  'PG', // Zone 6
+  'BG', // zone 8
+  'MX', // Zone 9
+  'ZA', // Zone 10 (LatAm + ZA)
+  'FJ', // Zone 11 (rest-of-world USD)
+  'DE', // Europe (EUR)
+  'CH', // Switzerland
+  'AX', // Rest of World
 ];
 
 // Full ISO-3166 alpha-2 list from the WCPBC country switcher (fallback if the
@@ -270,7 +314,10 @@ async function warmCountries(countries, urls) {
 
   if (COUNTRIES_ARG) {
     let countries;
-    if (COUNTRIES_ARG === 'kk' || COUNTRIES_ARG === 'markets') {
+    if (COUNTRIES_ARG === 'zones' || COUNTRIES_ARG === 'zone') {
+      countries = ZONE_REPS;
+      console.log(`Countries: ${countries.length} (1 per WCPBC pricing zone)`);
+    } else if (COUNTRIES_ARG === 'kk' || COUNTRIES_ARG === 'markets') {
       countries = KK_LIST;
       console.log(`Countries: ${countries.length} (KK shipping markets)`);
     } else if (COUNTRIES_ARG === 'popular') {
