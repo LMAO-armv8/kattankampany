@@ -14,12 +14,11 @@
  *
  * Usage:
  *   node kk-cache-warm.js                        # crawl + warm default country only
- *   node kk-cache-warm.js --countries            # + warm ALL countries (from the switcher)
- *   node kk-cache-warm.js --countries all        # same as above
- *   node kk-cache-warm.js --countries popular     # only the "Popular destinations" set
- *   node kk-cache-warm.js --countries IN,US,GB,AE # only these
- *   node kk-cache-warm.js --countries all --concurrency 10 --max 4000
- *   node kk-cache-warm.js --verify                # re-fetch default set, report hit-rate
+ *   node kk-cache-warm.js --countries kk         # KK shipping markets (recommended)
+ *   node kk-cache-warm.js --countries popular    # 11 high-traffic presets
+ *   node kk-cache-warm.js --countries all        # every switcher country (slow)
+ *   node kk-cache-warm.js --countries IN,US,GB,AE
+ *   node kk-cache-warm.js --verify               # re-fetch default set, report hit-rate
  */
 
 'use strict';
@@ -44,10 +43,18 @@ const MAX_RETRIES = parseInt(opt('retries', '4'), 10);         // retries on ove
 const MAX_PAGES = parseInt(opt('max', '5000'), 10);
 const USE_SITEMAP = !!opt('sitemap', false);
 const VERIFY = !!opt('verify', false);
-const COUNTRIES_ARG = opt('countries', false); // false | true | 'all' | 'popular' | 'IN,US,...'
-const UA = 'KK-CacheWarmer/1.1 (+cache warmup)';
+const COUNTRIES_ARG = opt('countries', false); // false | true | 'all' | 'popular' | 'kk' | 'IN,US,...'
+const UA = 'KK-CacheWarmer/1.2 (+cache warmup)';
 
 const POPULAR = ['IN', 'US', 'GB', 'CA', 'AU', 'SG', 'DE', 'AE', 'QA', 'SA', 'CH'];
+
+// Markets KK ships to (your reduced list). Use --countries kk (default in Actions).
+// "Other Europe" / "Rest of World" zone countries self-warm on first visit.
+const KK_LIST = [
+  'CA','IN','US','GB','DE','AU','NL','AE','SA','SG','QA','OM','BH','JO','KW','MY',
+  'NZ','SE','FR','AT','CZ','PL','CH','MT','HU','JP','ZA','IE','FI','ID','HR','ES',
+  'PT','IT','NO','DK','BE','TH','FJ','MV','GP','RE'
+];
 
 // Full ISO-3166 alpha-2 list from the WCPBC country switcher (fallback if the
 // live switcher can't be parsed).
@@ -263,13 +270,18 @@ async function warmCountries(countries, urls) {
 
   if (COUNTRIES_ARG) {
     let countries;
-    if (COUNTRIES_ARG === 'popular') {
+    if (COUNTRIES_ARG === 'kk' || COUNTRIES_ARG === 'markets') {
+      countries = KK_LIST;
+      console.log(`Countries: ${countries.length} (KK shipping markets)`);
+    } else if (COUNTRIES_ARG === 'popular') {
       countries = POPULAR;
+      console.log(`Countries: ${countries.length} (popular preset)`);
     } else if (COUNTRIES_ARG === true || COUNTRIES_ARG === 'all') {
       countries = discoveredCountries && discoveredCountries.length ? discoveredCountries : ALL_FALLBACK;
       console.log(`Countries: ${countries.length} (${discoveredCountries ? 'from switcher' : 'from fallback list'})`);
     } else {
       countries = String(COUNTRIES_ARG).toUpperCase().split(',').map((c) => c.trim()).filter((c) => /^[A-Z]{2}$/.test(c));
+      console.log(`Countries: ${countries.length} (explicit list)`);
     }
     await warmCountries(countries, urls);
   }
