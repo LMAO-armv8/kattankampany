@@ -2,14 +2,16 @@
 /**
  * KK cache warmer (GitHub Actions) — multi-country Worker edge warm
  * =============================================================================
- * Warms the Cloudflare Worker HTML cache (`x-kk-html-cache`), keyed by
- * `kk_wcpbc_country` + path (see strategy-B/cloudflare-worker.js).
+ * Warms the Cloudflare Worker HTML cache (`x-kk-html-cache`).
+ *
+ * Worker v4+ keys HTML by PRICING ZONE REP (not every country):
+ *   NG/KE → FJ, FR → DE, BR → ZA, etc. So `--countries zones` (35 reps)
+ *   warms prices for ~250 countries. Requires Worker CACHE_VERSION >= 4.
  *
  * IMPORTANT — Workers Cache API is PER CLOUDFLARE COLO, not global:
  *   This Action warms the colo that GitHub’s runner hits (usually US).
- *   Visitors in India/UAE/EU may still MISS until Tiered Cache / Cache Reserve
- *   shares the entry, or that colo sees its own first request.
- *   Always deploy Worker v3+ (max-age store fix) before trusting warm results.
+ *   Enable Tiered Cache (Smart) + Cache Reserve so other regions benefit.
+ *   Origin LiteSpeed also only needs the 35 zone-rep cookies now.
  *
  * Phase 1: BFS crawl → discover URLs (always sends Cookie: default country).
  * Phase 2: re-fetch every URL × each country.
@@ -158,6 +160,7 @@ async function fetchOnce(url, country) {
       const put = (res.headers.get('x-kk-html-cache-put') || '-').toLowerCase();
       const putErr = res.headers.get('x-kk-html-cache-put-error') || '';
       const geo = res.headers.get('x-kk-html-country') || '-';
+      const zone = res.headers.get('x-kk-html-zone') || '-';
       const cf = res.headers.get('cf-cache-status') || '-';
       const ls = res.headers.get('x-litespeed-cache') || '-';
       const ct = res.headers.get('content-type') || '';
@@ -168,7 +171,7 @@ async function fetchOnce(url, country) {
         try { await res.arrayBuffer(); } catch { /* ignore */ }
       }
       return {
-        ms, status: res.status, ls, kk, put, putErr, geo, cf,
+        ms, status: res.status, ls, kk, put, putErr, geo, zone, cf,
         redirected: res.redirected, html, overloaded: false, country: cc,
       };
     } catch (e) {
