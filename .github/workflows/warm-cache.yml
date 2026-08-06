@@ -1,16 +1,19 @@
 name: Warm cache
 
-# Keeps the LiteSpeed + Cloudflare-Worker cache warm by crawling the site and
-# fetching each page (per country). Runs on a schedule and can be triggered
-# manually with custom options.
+# Warms the Cloudflare Worker HTML cache (x-kk-html-cache) per country.
+# After each MISS it re-fetches once to confirm the edge stored the page.
 #
-# Requires `kk-cache-warm.js` to exist in the repo (path set by SCRIPT below).
+# Prerequisites:
+#   1) Deploy Worker v3+ (strategy-B/cloudflare-worker.js) — older workers
+#      stored max-age=0 / Vary: Cookie and never rematched.
+#   2) Cloudflare → Caching → Tiered Cache (Smart) + Cache Reserve
+#      (Workers Cache API is per-colo; Actions only warms the runner’s colo).
+#
+# Requires kk-cache-warm.js at the repo root (SCRIPT below).
 
 on:
   schedule:
-    # Weekly — Sunday 12:00 IST (= 06:30 UTC; GitHub cron is UTC, IST = UTC+5:30).
-    # Matches LiteSpeed's ~1-week page-cache lifetime. Trigger manually any time
-    # via "Run workflow" below.
+    # Weekly — Sunday 12:00 IST (= 06:30 UTC).
     - cron: '30 6 * * 0'
   workflow_dispatch:
     inputs:
@@ -30,8 +33,11 @@ on:
         description: 'Site base URL'
         default: 'https://kattankampany.com/'
         type: string
+      verify:
+        description: 'Run verify pass after warm (fail job if HIT rate low)'
+        default: true
+        type: boolean
 
-# Never let two warm runs overlap (a slow run + the next schedule).
 concurrency:
   group: warm-cache
   cancel-in-progress: false
@@ -39,9 +45,9 @@ concurrency:
 jobs:
   warm:
     runs-on: ubuntu-latest
-    timeout-minutes: 350   # GitHub-hosted runners are hard-capped at 360 min/job
+    timeout-minutes: 350
     env:
-      SCRIPT: kk-cache-warm.js          # adjust if you put the file in a subfolder
+      SCRIPT: kk-cache-warm.js
       BASE_URL: ${{ github.event.inputs.base_url || 'https://kattankampany.com/' }}
       COUNTRIES: ${{ github.event.inputs.countries || 'zones' }}
       CONCURRENCY: ${{ github.event.inputs.concurrency || '2' }}
@@ -57,5 +63,17 @@ jobs:
 
       - name: Warm cache
         run: |
+          set -euo pipefail
           echo "Warming $BASE_URL  countries=$COUNTRIES  concurrency=$CONCURRENCY  max=$MAX"
-          node "$SCRIPT" "$BASE_URL" --countries "$COUNTRIES" --concurrency "$CONCURRENCY" --max "$MAX"
+          echo "Looking for x-kk-html-cache / x-kk-html-cache-put (Worker v3+)."
+          VERIFY_FLAG=""
+          if [ "${{ github.event.inputs.verify || 'true' }}" = "true" ]; then
+            VERIFY_FLAG="--verify"
+          fi
+          node "$SCRIPT" "$BASE_URL" \
+            --countries "$COUNTRIES" \
+            --concurrency "$CONCURRENCY" \
+            --max "$MAX" \
+            --default-country IN \
+            --confirm \
+            $VERIFY_FLAG
