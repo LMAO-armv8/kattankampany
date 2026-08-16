@@ -1,0 +1,34 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+*.lock.bak
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# pubspec.lock IS committed. This is an application, not a library: pinning the
+# resolved dependency versions is what makes a CI release build reproducible and
+# identical to a local one.
+
+# Generated code
+*.g.dart
+*.freezed.dart
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# Windows build output
+windows/flutter/ephemeral/
+installer/Output/
+
+# Local runtime data (never commit)
+*.db
+*.db-wal
+*.db-shm
+*.log
+credentials/

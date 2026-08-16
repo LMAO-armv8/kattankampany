@@ -1,0 +1,135 @@
+# Builds the Windows release and the Inno Setup installer on a GitHub-hosted
+# runner.
+#
+# Why this exists: `flutter build windows` requires Visual Studio's C++
+# toolchain — Flutter invokes VS's own bundled CMake and the "Visual Studio 17
+# 2022" (MSBuild) generator, so a portable/standalone MSVC cannot substitute for
+# it. Installing Visual Studio needs local administrator rights. The
+# `windows-latest` runner already has VS 2022 with the C++ workload, so this
+# workflow produces a signed-ready installer without anyone needing admin on a
+# developer machine.
+#
+# Output: download `PrintAgent-Setup-<version>.exe` from the run's Artifacts
+# section. Pushing a `v*` tag additionally attaches it to a GitHub Release.
+
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed only by the release job
+
+env:
+  # Pin the toolchain so a release is reproducible. Bump deliberately.
+  FLUTTER_VERSION: 3.41.8
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter ${{ env.FLUTTER_VERSION }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Show toolchain
+        run: flutter doctor -v
+
+      # The repository does not commit generated code (see .gitignore), so the
+      # freezed / json_serializable part files must be produced here.
+      - name: Fetch packages
+        run: flutter pub get
+
+      - name: Generate code
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Analyse
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release
+        run: flutter build windows --release
+
+      # Inno Setup ships on the windows-latest image, but the image contents do
+      # change; install it if it is not already there rather than failing.
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup not present on the image; installing."
+            choco install innosetup --no-progress -y
+          }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup is still missing at $iscc." }
+          Write-Host "ISCC: $iscc"
+
+      # Keep the installer's version in step with pubspec.yaml so the Programs
+      # and Features entry always matches the binary that was built.
+      - name: Read version from pubspec.yaml
+        id: version
+        shell: pwsh
+        run: |
+          $pubspec = Get-Content pubspec.yaml -Raw
+          if ($pubspec -notmatch '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)') {
+            throw "Could not read a version from pubspec.yaml."
+          }
+          $version = $Matches[1]
+          "version=$version" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Version: $version"
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=${{ steps.version.outputs.version }}" installer\print_agent.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed." }
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrintAgent-Setup-${{ steps.version.outputs.version }}
+          path: installer/Output/*.exe
+          if-no-files-found: error
+
+      # The portable payload, for anyone who would rather xcopy-deploy than run
+      # an installer. The whole folder is required — the exe alone will not run.
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrintAgent-portable-${{ steps.version.outputs.version }}
+          path: build/windows/x64/runner/Release/
+          if-no-files-found: error
+
+  release:
+    name: Attach to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          pattern: PrintAgent-Setup-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
