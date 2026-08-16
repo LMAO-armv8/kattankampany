@@ -1,3 +1,9 @@
+# docs/ ships inside the installer (see installer/print_agent.iss) and is
+# referenced throughout the README, so it must be tracked. This negation exists
+# because a global core.excludesFile may carry a `/docs/` rule; a repository
+# .gitignore takes precedence over it.
+!/docs/
+
 # Flutter / Dart
 .dart_tool/
 .packages
