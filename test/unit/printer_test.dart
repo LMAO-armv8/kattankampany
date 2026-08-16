@@ -5,6 +5,7 @@ import 'package:wc_print_agent/features/printers/domain/print_profile.dart';
 import 'package:wc_print_agent/features/printers/domain/printer_device.dart';
 import 'package:wc_print_agent/features/printers/domain/printer_status.dart';
 import 'package:wc_print_agent/services/printer/printer_resolver.dart';
+import 'package:wc_print_agent/services/printer/win32/port_inspector.dart';
 import 'package:wc_print_agent/services/printer/win32/windows_spooler.dart';
 import 'package:wc_print_agent/services/printer/win32/winspool_ffi.dart';
 
@@ -126,6 +127,116 @@ void main() {
         PrinterConnectionType.fromPortName(null),
         PrinterConnectionType.unknown,
       );
+    });
+  });
+
+  group('PortInspector', () {
+    // A Bluetooth printer reaches Windows over a virtual serial port, so the
+    // port name alone is indistinguishable from a real RS-232 printer. Only the
+    // SERIALCOMM mapping separates them.
+    const inspector = PortInspector(
+      bluetoothComPorts: <String>{'COM5'},
+      portHosts: <String, String>{'THERMAL_LABEL': '192.168.1.50'},
+    );
+
+    test('a Bluetooth COM port is not mistaken for a serial printer', () {
+      expect(
+        inspector.classify(port: 'COM5'),
+        PrinterConnectionType.bluetooth,
+      );
+      expect(
+        inspector.classify(port: 'COM5:'),
+        PrinterConnectionType.bluetooth,
+        reason: 'Windows writes the port both with and without the colon',
+      );
+      expect(
+        inspector.classify(port: 'COM3'),
+        PrinterConnectionType.serial,
+        reason: 'a COM port with no Bluetooth mapping stays serial',
+      );
+    });
+
+    test('a named TCP/IP port is network even without a recognisable name', () {
+      expect(
+        inspector.classify(port: 'THERMAL_LABEL'),
+        PrinterConnectionType.network,
+      );
+      expect(inspector.hostFor('THERMAL_LABEL'), '192.168.1.50');
+      expect(inspector.hostFor('USB001'), isNull);
+    });
+
+    test('port name wins, then driver and product name', () {
+      expect(inspector.classify(port: 'USB001'), PrinterConnectionType.usb);
+      expect(inspector.classify(port: 'BTH001'), PrinterConnectionType.bluetooth);
+      expect(inspector.classify(port: 'LPT1:'), PrinterConnectionType.parallel);
+      expect(
+        inspector.classify(port: r'\\server\label'),
+        PrinterConnectionType.network,
+      );
+      expect(
+        inspector.classify(port: 'PRN', driver: 'Acme Bluetooth Printer'),
+        PrinterConnectionType.bluetooth,
+        reason: 'a useless port name falls back to the driver',
+      );
+      expect(
+        inspector.classify(port: 'PRN', displayName: 'Acme Wireless 300'),
+        PrinterConnectionType.network,
+      );
+    });
+
+    test('virtual devices never report a physical transport', () {
+      expect(
+        inspector.classify(port: 'PORTPROMPT:'),
+        PrinterConnectionType.virtual,
+      );
+      expect(
+        inspector.classify(port: 'NUL:', isVirtual: true),
+        PrinterConnectionType.virtual,
+      );
+      expect(
+        inspector.classify(port: 'UNRECOGNISED', isVirtual: true),
+        PrinterConnectionType.virtual,
+      );
+    });
+
+    test('an unreadable registry degrades to name-only classification', () {
+      const bare = PortInspector();
+      expect(bare.classify(port: 'USB001'), PrinterConnectionType.usb);
+      // Without the SERIALCOMM mapping a Bluetooth printer looks serial. That
+      // is the documented fallback, not a bug: it must not throw or vanish.
+      expect(bare.classify(port: 'COM5'), PrinterConnectionType.serial);
+      expect(bare.hostFor('THERMAL_LABEL'), isNull);
+    });
+  });
+
+  group('DiscoveredPrinter transport', () {
+    test('an explicit classification overrides the port-name guess', () {
+      const device = DiscoveredPrinter(
+        printerKey: 'Thermal',
+        displayName: 'Thermal',
+        portName: 'COM5',
+        connectionType: PrinterConnectionType.bluetooth,
+      );
+      expect(device.connectionType, PrinterConnectionType.bluetooth);
+    });
+
+    test('falls back to the port name when none is supplied', () {
+      const device = DiscoveredPrinter(
+        printerKey: 'Office',
+        displayName: 'Office',
+        portName: 'USB001',
+      );
+      expect(device.connectionType, PrinterConnectionType.usb);
+    });
+
+    test('an unclassifiable virtual device reports virtual', () {
+      const device = DiscoveredPrinter(
+        printerKey: 'PDF',
+        displayName: 'PDF',
+        portName: 'UNRECOGNISED',
+        isVirtual: true,
+      );
+      expect(device.connectionType, PrinterConnectionType.virtual);
     });
   });
 

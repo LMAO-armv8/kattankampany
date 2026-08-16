@@ -45,7 +45,9 @@ class DiscoveredPrinter {
     this.queuedJobCount = 0,
     this.paperSizes = const <String>[],
     this.isVirtual = false,
-  });
+    this.host,
+    PrinterConnectionType? connectionType,
+  }) : _connectionType = connectionType;
 
   /// The Windows printer name. This is the stable identifier used everywhere —
   /// in the database, in heartbeats, and as the server's `printer_key`.
@@ -62,11 +64,25 @@ class DiscoveredPrinter {
   final List<String> paperSizes;
   final bool isVirtual;
 
-  PrinterConnectionType get connectionType =>
-      isVirtual && PrinterConnectionType.fromPortName(portName) ==
-              PrinterConnectionType.unknown
-          ? PrinterConnectionType.virtual
-          : PrinterConnectionType.fromPortName(portName);
+  /// Host or address behind a network port, when the port monitor records one.
+  final String? host;
+
+  /// Supplied by the platform layer, which can consult port topology the port
+  /// name alone does not reveal (see `PortInspector`).
+  final PrinterConnectionType? _connectionType;
+
+  /// The resolved transport. Falls back to the name-only classification when the
+  /// platform layer did not supply one — which is what the non-Windows stub and
+  /// older callers do.
+  PrinterConnectionType get connectionType {
+    final supplied = _connectionType;
+    if (supplied != null && supplied != PrinterConnectionType.unknown) {
+      return supplied;
+    }
+    final byName = PrinterConnectionType.fromPortName(portName);
+    if (byName != PrinterConnectionType.unknown) return byName;
+    return isVirtual ? PrinterConnectionType.virtual : byName;
+  }
 }
 
 /// A printer as the agent knows it: discovery data merged with operator
@@ -81,6 +97,9 @@ class PrinterDevice with _$PrinterDevice {
     String? portName,
     String? manufacturer,
     String? model,
+    /// Host or address behind a network port. Diagnostic only; jobs are always
+    /// addressed by [printerKey] through the spooler.
+    String? host,
     @Default(PrinterConnectionType.unknown) PrinterConnectionType connectionType,
     @Default(false) bool isDefault,
     @Default(true) bool isEnabled,
@@ -103,10 +122,18 @@ class PrinterDevice with _$PrinterDevice {
 
   /// Human description under the printer name in the UI.
   String get subtitle {
+    // The host is only added when the port name does not already contain it —
+    // a Standard TCP/IP port is usually called `IP_192.168.1.50`, and repeating
+    // the address would be noise.
+    final showHost = host != null &&
+        host!.isNotEmpty &&
+        !(portName ?? '').toUpperCase().contains(host!.toUpperCase());
+
     final parts = <String>[
       if (manufacturer != null && manufacturer!.isNotEmpty) manufacturer!,
       if (model != null && model!.isNotEmpty && model != manufacturer) model!,
       if (portName != null && portName!.isNotEmpty) portName!,
+      if (showHost) host!,
     ];
     if (parts.isEmpty && driverName != null) parts.add(driverName!);
     return parts.join(' · ');
@@ -127,6 +154,7 @@ class PrinterDevice with _$PrinterDevice {
         'port_name': portName,
         'manufacturer': manufacturer,
         'model': model,
+        'host': host,
         'connection_type': connectionType.name,
         'is_default': isDefault ? 1 : 0,
         'is_enabled': isEnabled ? 1 : 0,
@@ -167,6 +195,7 @@ class PrinterDevice with _$PrinterDevice {
       portName: row['port_name'] as String?,
       manufacturer: row['manufacturer'] as String?,
       model: row['model'] as String?,
+      host: row['host'] as String?,
       connectionType:
           PrinterConnectionType.fromWire(row['connection_type'] as String?),
       isDefault: (row['is_default'] as int? ?? 0) == 1,
@@ -199,6 +228,7 @@ class PrinterDevice with _$PrinterDevice {
         if (portName != null) 'port': portName,
         if (manufacturer != null) 'manufacturer': manufacturer,
         if (model != null) 'model': model,
+        if (host != null) 'host': host,
         'connection_type': connectionType.name,
         'is_default': isDefault,
         'is_enabled': isEnabled,

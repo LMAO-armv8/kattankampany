@@ -8,6 +8,7 @@ import '../../../core/errors/app_exception.dart';
 import '../../../core/errors/error_codes.dart';
 import '../../../features/printers/domain/printer_device.dart';
 import '../../../features/printers/domain/printer_status.dart';
+import 'port_inspector.dart';
 import 'winspool_ffi.dart';
 
 /// Thin, allocation-safe wrapper over the Windows print spooler.
@@ -16,9 +17,15 @@ import 'winspool_ffi.dart';
 /// microseconds — and every allocation is released in a `finally`. Nothing in
 /// this class knows about jobs, documents or the queue.
 class WindowsSpooler {
-  WindowsSpooler({Winspool? bindings}) : _bindings = bindings;
+  WindowsSpooler({Winspool? bindings, PortInspector? portInspector})
+      : _bindings = bindings,
+        _inspector = portInspector;
 
   final Winspool? _bindings;
+
+  /// Injected by tests so port classification can be exercised without a
+  /// registry. Null in production, where topology is read per discovery pass.
+  final PortInspector? _inspector;
 
   Winspool get _spool => _bindings ?? Winspool.instance;
 
@@ -73,9 +80,12 @@ class WindowsSpooler {
       final count = returned.value;
       final stride = sizeOf<PRINTER_INFO_2W>();
       final base = buffer.cast<PRINTER_INFO_2W>();
-      final results = <DiscoveredPrinter>[];
       final defaultKey = defaultPrinterName();
 
+      // Read the spooler rows first, then resolve port topology once for the
+      // whole set. The registry lookups behind PortInspector are keyed by port
+      // name, so they need the full list before they can run.
+      final rows = <_SpoolerRow>[];
       for (var i = 0; i < count; i++) {
         final info = Pointer<PRINTER_INFO_2W>.fromAddress(
           base.address + i * stride,
@@ -84,32 +94,53 @@ class WindowsSpooler {
         final name = _readUtf16(info.pPrinterName);
         if (name == null || name.isEmpty) continue;
 
-        final driver = _readUtf16(info.pDriverName);
-        final port = _readUtf16(info.pPortName);
-        final attributes = info.Attributes;
-        final isVirtual = _looksVirtual(port, driver);
-
-        results.add(
-          DiscoveredPrinter(
-            printerKey: name,
-            displayName: name,
-            driverName: driver,
-            portName: port,
-            manufacturer: _guessManufacturer(driver, name),
-            model: _guessModel(driver, name),
-            isDefault: defaultKey != null && defaultKey == name,
-            state: mapStatus(
-              info.Status,
-              attributes: attributes,
-              queuedJobs: info.cJobs,
-            ),
-            rawStatusBits: info.Status,
-            queuedJobCount: info.cJobs,
-            isVirtual: isVirtual,
+        rows.add(
+          _SpoolerRow(
+            name: name,
+            driver: _readUtf16(info.pDriverName),
+            port: _readUtf16(info.pPortName),
+            status: info.Status,
+            attributes: info.Attributes,
+            queuedJobs: info.cJobs,
           ),
         );
       }
-      return results;
+
+      final inspector = _inspector ??
+          PortInspector.load(
+            portNames: rows
+                .map((_SpoolerRow r) => r.port ?? '')
+                .where((String p) => p.isNotEmpty)
+                .toSet(),
+          );
+
+      return rows.map((_SpoolerRow row) {
+        final isVirtual = _looksVirtual(row.port, row.driver);
+        return DiscoveredPrinter(
+          printerKey: row.name,
+          displayName: row.name,
+          driverName: row.driver,
+          portName: row.port,
+          manufacturer: _guessManufacturer(row.driver, row.name),
+          model: _guessModel(row.driver, row.name),
+          isDefault: defaultKey != null && defaultKey == row.name,
+          state: mapStatus(
+            row.status,
+            attributes: row.attributes,
+            queuedJobs: row.queuedJobs,
+          ),
+          rawStatusBits: row.status,
+          queuedJobCount: row.queuedJobs,
+          isVirtual: isVirtual,
+          host: inspector.hostFor(row.port),
+          connectionType: inspector.classify(
+            port: row.port,
+            driver: row.driver,
+            displayName: row.name,
+            isVirtual: isVirtual,
+          ),
+        );
+      }).toList(growable: false);
     } finally {
       calloc.free(needed);
       calloc.free(returned);
@@ -497,4 +528,24 @@ class WindowsSpooler {
 
 extension _FirstOrNull<T> on List<T> {
   T? get firstOrNull => isEmpty ? null : this[0];
+}
+
+/// One `PRINTER_INFO_2W` row, copied out of native memory so the buffer can be
+/// freed before port topology is resolved.
+class _SpoolerRow {
+  const _SpoolerRow({
+    required this.name,
+    required this.driver,
+    required this.port,
+    required this.status,
+    required this.attributes,
+    required this.queuedJobs,
+  });
+
+  final String name;
+  final String? driver;
+  final String? port;
+  final int status;
+  final int attributes;
+  final int queuedJobs;
 }

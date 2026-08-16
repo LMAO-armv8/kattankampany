@@ -124,7 +124,10 @@ enum PrinterConnectionType {
 
   String get label => switch (this) {
         PrinterConnectionType.usb => 'USB',
-        PrinterConnectionType.network => 'Network',
+        // Windows does not record whether a network printer is reached over
+        // Wi-Fi or Ethernet, and the host cannot determine it, so the two share
+        // one category rather than the agent guessing.
+        PrinterConnectionType.network => 'Wi-Fi / Network',
         PrinterConnectionType.bluetooth => 'Bluetooth',
         PrinterConnectionType.serial => 'Serial',
         PrinterConnectionType.parallel => 'Parallel',

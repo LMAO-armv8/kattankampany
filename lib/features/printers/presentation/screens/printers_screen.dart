@@ -9,19 +9,45 @@ import '../../../../features/printing/domain/print_request.dart';
 import '../../../../routing/app_shell.dart';
 import '../../domain/print_profile.dart';
 import '../../domain/printer_device.dart';
+import '../../domain/printer_status.dart';
 
 /// Printer inventory, per-printer configuration and test printing.
 ///
 /// Test Print is the single most useful thing on this screen during an
 /// installation: it proves the agent can reach the device before any real order
 /// depends on it, and it needs no server involvement at all.
-class PrintersScreen extends ConsumerWidget {
+class PrintersScreen extends ConsumerStatefulWidget {
   const PrintersScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PrintersScreen> createState() => _PrintersScreenState();
+}
+
+class _PrintersScreenState extends ConsumerState<PrintersScreen> {
+  /// Null means "all transports".
+  PrinterConnectionType? _filter;
+
+  @override
+  Widget build(BuildContext context) {
     final printers = ref.watch(printersProvider).value ?? <PrinterDevice>[];
     final manager = ref.watch(printerManagerProvider);
+
+    // Counts come from the full inventory so a filter chip never reads zero
+    // just because another filter is active.
+    final counts = <PrinterConnectionType, int>{};
+    for (final printer in printers) {
+      counts.update(
+        printer.connectionType,
+        (int value) => value + 1,
+        ifAbsent: () => 1,
+      );
+    }
+
+    final visible = _filter == null
+        ? printers
+        : printers
+            .where((PrinterDevice p) => p.connectionType == _filter)
+            .toList(growable: false);
 
     return ListView(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -47,23 +73,118 @@ class PrintersScreen extends ConsumerWidget {
                       : 'Printing is unavailable on this platform',
                   message: manager.isSupported
                       ? 'Windows is not reporting any printers to this agent. '
-                          'Check that a printer is installed and switched on, '
-                          'then choose Refresh.'
+                          'USB, Bluetooth and network printers all appear here '
+                          'once they are installed in Windows. Check that the '
+                          'printer is installed and switched on, then choose '
+                          'Refresh.'
                       : 'This build prints through the Windows spooler. Run the '
                           'agent on Windows to discover printers.',
                 )
               : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    for (final printer in printers)
-                      _PrinterTile(
-                        printer: printer,
-                        key: ValueKey<String>(printer.printerKey),
-                      ),
+                    _ConnectionFilterBar(
+                      counts: counts,
+                      total: printers.length,
+                      selected: _filter,
+                      onChanged: (PrinterConnectionType? value) =>
+                          setState(() => _filter = value),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    if (visible.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: AppSpacing.lg,
+                        ),
+                        child: Text(
+                          'No ${_filter!.label.toLowerCase()} printers are '
+                          'installed on this computer.',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color:
+                                    Theme.of(context).colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                      )
+                    else
+                      for (final printer in visible)
+                        _PrinterTile(
+                          printer: printer,
+                          key: ValueKey<String>(printer.printerKey),
+                        ),
                   ],
                 ),
         ),
         const SizedBox(height: AppSpacing.md),
         const _ProfilesCard(),
+      ],
+    );
+  }
+}
+
+/// Transport filter across the discovered inventory.
+///
+/// Only transports that are actually present get a chip — a shop floor PC with
+/// two USB printers should not be shown four empty categories.
+class _ConnectionFilterBar extends StatelessWidget {
+  const _ConnectionFilterBar({
+    required this.counts,
+    required this.total,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final Map<PrinterConnectionType, int> counts;
+  final int total;
+  final PrinterConnectionType? selected;
+  final ValueChanged<PrinterConnectionType?> onChanged;
+
+  /// Presentation order: the transports an operator is most likely to be
+  /// looking for come first.
+  static const List<PrinterConnectionType> _order = <PrinterConnectionType>[
+    PrinterConnectionType.usb,
+    PrinterConnectionType.network,
+    PrinterConnectionType.bluetooth,
+    PrinterConnectionType.serial,
+    PrinterConnectionType.parallel,
+    PrinterConnectionType.virtual,
+    PrinterConnectionType.unknown,
+  ];
+
+  static IconData iconFor(PrinterConnectionType type) => switch (type) {
+        PrinterConnectionType.usb => Icons.usb,
+        PrinterConnectionType.network => Icons.wifi,
+        PrinterConnectionType.bluetooth => Icons.bluetooth,
+        PrinterConnectionType.serial => Icons.settings_input_component,
+        PrinterConnectionType.parallel => Icons.cable,
+        PrinterConnectionType.virtual => Icons.picture_as_pdf_outlined,
+        PrinterConnectionType.unknown => Icons.help_outline,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final present =
+        _order.where((PrinterConnectionType t) => (counts[t] ?? 0) > 0);
+
+    // A single transport means the filter cannot narrow anything.
+    if (present.length < 2) return const SizedBox.shrink();
+
+    return Wrap(
+      spacing: AppSpacing.sm,
+      runSpacing: AppSpacing.sm,
+      children: <Widget>[
+        ChoiceChip(
+          selected: selected == null,
+          onSelected: (_) => onChanged(null),
+          avatar: const Icon(Icons.print_outlined, size: 15),
+          label: Text('All ($total)'),
+        ),
+        for (final type in present)
+          ChoiceChip(
+            selected: selected == type,
+            onSelected: (_) => onChanged(type),
+            avatar: Icon(iconFor(type), size: 15),
+            label: Text('${type.label} (${counts[type]})'),
+          ),
       ],
     );
   }
@@ -187,7 +308,7 @@ class _PrinterTileState extends ConsumerState<_PrinterTile> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: <Widget>[
               _Meta(
-                icon: Icons.cable,
+                icon: _ConnectionFilterBar.iconFor(printer.connectionType),
                 text: printer.connectionType.label,
               ),
               if (printer.lastStatusAt != null)

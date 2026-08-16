@@ -12,7 +12,7 @@ class Migration {
   final List<String> statements;
 }
 
-const int latestVersion = 1;
+const int latestVersion = 2;
 
 const List<Migration> migrations = <Migration>[
   Migration(
@@ -184,6 +184,17 @@ const List<Migration> migrations = <Migration>[
       )
       ''',
       'CREATE INDEX idx_idem_pending ON idempotency_keys(confirmed_at)',
+    ],
+  ),
+  Migration(
+    version: 2,
+    statements: <String>[
+      // The host or address behind a network printer port, read from the
+      // Standard TCP/IP port monitor at discovery time. Diagnostic only — jobs
+      // are always addressed by printer_key through the spooler — but it is the
+      // first thing a support engineer asks for when a network printer stops
+      // answering.
+      'ALTER TABLE printers ADD COLUMN host TEXT',
     ],
   ),
 ];

@@ -141,6 +141,7 @@ class PrinterManager {
         portName: device.portName,
         manufacturer: device.manufacturer,
         model: device.model,
+        host: device.host,
         connectionType: device.connectionType,
         isDefault: device.isDefault,
         // Operator configuration survives rediscovery.

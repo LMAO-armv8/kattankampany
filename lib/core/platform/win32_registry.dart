@@ -2,9 +2,13 @@
 //
 // Minimal advapi32 registry bindings.
 //
-// Only the five calls the agent needs (create, set, query, delete, close) are
-// bound, all against `HKEY_CURRENT_USER`. The agent never writes to
+// Only the calls the agent needs (create, set, query, enumerate, delete, close)
+// are bound. Writes always target `HKEY_CURRENT_USER`; the agent never writes to
 // `HKEY_LOCAL_MACHINE`, so it never needs administrator rights at runtime.
+//
+// Reads may target `HKEY_LOCAL_MACHINE`, which needs no elevation. Printer
+// port topology (which COM port is a Bluetooth link, which TCP/IP port maps to
+// which host) lives there and nowhere else. See `PortInspector`.
 library;
 
 import 'dart:ffi';
@@ -93,6 +97,27 @@ typedef _RegDeleteValueDart = int Function(
   Pointer<Utf16> lpValueName,
 );
 
+typedef _RegEnumValueNative = Int32 Function(
+  IntPtr hKey,
+  Uint32 dwIndex,
+  Pointer<Utf16> lpValueName,
+  Pointer<Uint32> lpcchValueName,
+  Pointer<Uint32> lpReserved,
+  Pointer<Uint32> lpType,
+  Pointer<Uint8> lpData,
+  Pointer<Uint32> lpcbData,
+);
+typedef _RegEnumValueDart = int Function(
+  int hKey,
+  int dwIndex,
+  Pointer<Utf16> lpValueName,
+  Pointer<Uint32> lpcchValueName,
+  Pointer<Uint32> lpReserved,
+  Pointer<Uint32> lpType,
+  Pointer<Uint8> lpData,
+  Pointer<Uint32> lpcbData,
+);
+
 typedef _RegCloseKeyNative = Int32 Function(IntPtr hKey);
 typedef _RegCloseKeyDart = int Function(int hKey);
 
@@ -125,12 +150,17 @@ class _Advapi32 {
       _lib.lookupFunction<_RegDeleteValueNative, _RegDeleteValueDart>(
     'RegDeleteValueW',
   );
+  late final _RegEnumValueDart enumValue =
+      _lib.lookupFunction<_RegEnumValueNative, _RegEnumValueDart>(
+    'RegEnumValueW',
+  );
   late final _RegCloseKeyDart closeKey =
       _lib.lookupFunction<_RegCloseKeyNative, _RegCloseKeyDart>('RegCloseKey');
 }
 
 abstract final class RegistryConstants {
   static const int hkeyCurrentUser = 0x80000001;
+  static const int hkeyLocalMachine = 0x80000002;
   static const int keyRead = 0x20019;
   static const int keyWrite = 0x20006;
   static const int keyAllAccess = 0xF003F;
@@ -144,9 +174,13 @@ abstract final class Win32Registry {
   static bool get isSupported => Platform.isWindows;
 
   /// Reads a REG_SZ value. Returns null when the key or value is absent.
+  ///
+  /// [hive] defaults to `HKEY_CURRENT_USER`. Reading `HKEY_LOCAL_MACHINE`
+  /// requires no elevation.
   static String? readString({
     required String subKey,
     required String valueName,
+    int hive = RegistryConstants.hkeyCurrentUser,
   }) {
     if (!isSupported) return null;
     final api = _Advapi32.instance;
@@ -157,7 +191,7 @@ abstract final class Win32Registry {
 
     try {
       if (api.openKeyEx(
-            RegistryConstants.hkeyCurrentUser,
+            hive,
             keyPtr,
             0,
             RegistryConstants.keyRead,
@@ -193,6 +227,88 @@ abstract final class Win32Registry {
       calloc.free(handle);
       calloc.free(size);
     }
+  }
+
+  /// Every REG_SZ value under [subKey], as `{valueName: value}`.
+  ///
+  /// Values of other types are skipped rather than guessed at. Returns an empty
+  /// map when the key does not exist, which is the normal case on a machine with
+  /// no Bluetooth stack or no TCP/IP printer ports.
+  static Map<String, String> readStringValues({
+    required String subKey,
+    int hive = RegistryConstants.hkeyCurrentUser,
+  }) {
+    final result = <String, String>{};
+    if (!isSupported) return result;
+
+    final api = _Advapi32.instance;
+    final keyPtr = subKey.toNativeUtf16();
+    final handle = calloc<IntPtr>();
+
+    // Documented maxima: 16 383 chars for a value name, and the agent only reads
+    // short strings (COM port names, host names), so a fixed data buffer is
+    // sufficient and avoids a sizing round-trip per value.
+    const nameCapacity = 16384;
+    const dataCapacity = 4096;
+    final namePtr = calloc<Uint16>(nameCapacity).cast<Utf16>();
+    final dataPtr = calloc<Uint8>(dataCapacity);
+    final nameLen = calloc<Uint32>();
+    final dataLen = calloc<Uint32>();
+    final type = calloc<Uint32>();
+
+    try {
+      if (api.openKeyEx(
+            hive,
+            keyPtr,
+            0,
+            RegistryConstants.keyRead,
+            handle,
+          ) !=
+          RegistryConstants.errorSuccess) {
+        return result;
+      }
+      final hKey = handle.value;
+      try {
+        for (var index = 0;; index++) {
+          nameLen.value = nameCapacity;
+          dataLen.value = dataCapacity;
+          final status = api.enumValue(
+            hKey,
+            index,
+            namePtr,
+            nameLen,
+            nullptr,
+            type,
+            dataPtr,
+            dataLen,
+          );
+          if (status != RegistryConstants.errorSuccess) break;
+          if (type.value != RegistryConstants.regSz) continue;
+          if (dataLen.value == 0) continue;
+
+          final name = namePtr.toDartString(length: nameLen.value);
+          // RegEnumValueW reports the byte count including the terminator.
+          final chars = (dataLen.value ~/ 2).clamp(0, dataCapacity ~/ 2);
+          var value = dataPtr.cast<Utf16>().toDartString(length: chars);
+          final terminator = value.indexOf('\u0000');
+          if (terminator >= 0) value = value.substring(0, terminator);
+          if (value.isNotEmpty) result[name] = value;
+        }
+      } finally {
+        api.closeKey(hKey);
+      }
+    } catch (_) {
+      // A malformed hive is not worth failing discovery over.
+    } finally {
+      calloc.free(keyPtr);
+      calloc.free(handle);
+      calloc.free(namePtr);
+      calloc.free(dataPtr);
+      calloc.free(nameLen);
+      calloc.free(dataLen);
+      calloc.free(type);
+    }
+    return result;
   }
 
   /// Creates the key if needed and writes a REG_SZ value.

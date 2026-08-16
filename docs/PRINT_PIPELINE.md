@@ -22,6 +22,34 @@ macOS/Linux ports) without `Platform.isWindows` checks leaking into callers.
 inventory, the status poll timer, persistence to SQLite, the discovery-change stream,
 and printer resolution.
 
+### Discovery scope and transports
+
+Discovery calls `EnumPrintersW` with `PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS`,
+so **every** printer the Windows spooler knows about is returned — USB, Bluetooth,
+network, serial, parallel and virtual alike. Nothing is filtered out; virtual devices
+(PDF writers, fax) are flagged rather than hidden, so an operator can still route
+invoices to one deliberately. A printer that can be printed to from Windows is, by
+definition, installed in the spooler, so this is the complete set of usable devices.
+
+`EnumPrintersW` reports a port *name* but nothing about how that port is wired.
+`PortInspector` (`lib/services/printer/win32/port_inspector.dart`) resolves the rest
+from two read-only `HKEY_LOCAL_MACHINE` lookups — neither needs elevation:
+
+| Case | Why the port name is not enough | Source |
+|---|---|---|
+| **Bluetooth** | Windows exposes a paired Bluetooth printer as a virtual serial port, so it arrives as `COM5`, indistinguishable from an RS-232 printer. | `HARDWARE\DEVICEMAP\SERIALCOMM`, where a Bluetooth link appears as `\Device\BthModem0`. |
+| **Network** | A Standard TCP/IP port may be named anything its creator typed. | `…\Print\Monitors\Standard TCP/IP Port\Ports\<port>` → `HostName` / `IPAddress`. |
+
+Classification order is port name → registry topology → driver/product name, and it
+degrades to name-only when the registry is unreadable. It is advisory: it drives the
+UI filter and the heartbeat inventory, and is never used to decide whether a printer
+may be printed to.
+
+> **Wi-Fi vs Ethernet is deliberately not distinguished.** Windows does not record it,
+> and it is not discoverable from the host — a printer at `192.168.1.50` looks
+> identical either way. Both are `PrinterConnectionType.network`, labelled
+> *Wi-Fi / Network*. Splitting them would mean sending a guess to the server as fact.
+
 ### Resolution rules (spec §18/§19)
 
 `PrinterResolver.resolve(job)` returns one of:
