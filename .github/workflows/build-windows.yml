@@ -15,11 +15,13 @@
 name: Build Windows installer
 
 on:
+  # Any branch, deliberately. GitHub only offers "Run workflow" (workflow_dispatch)
+  # for workflows that already exist on the default branch, so restricting this to
+  # main would leave a feature branch with no way to produce an installer.
   push:
-    branches: [main, master]
+    branches: ['**']
     tags: ['v*']
   pull_request:
-    branches: [main, master]
   workflow_dispatch:
 
 permissions:
