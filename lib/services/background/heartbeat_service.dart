@@ -45,12 +45,23 @@ class HeartbeatService {
 
   ServerCommandHandler? onCommand;
 
+  /// How many consecutive rejections before the agent gives up beating.
+  ///
+  /// One rejection proves nothing. A Cloudflare challenge, a WAF rule, a token
+  /// rotation racing an in-flight request or a brief server fault all surface
+  /// as 401/403, and treating any single one as "this agent has been revoked"
+  /// used to stop the heartbeat permanently — the store then showed the machine
+  /// as offline until somebody restarted the application. Requiring a run of
+  /// them keeps a genuine revocation detectable while surviving a blip.
+  static const int _maxConsecutiveRejections = 5;
+
   Timer? _timer;
   bool _running = false;
   bool _inFlight = false;
   bool _paused = false;
   DateTime? _lastSuccessAt;
   String? _lastPrinterFingerprint;
+  int _consecutiveRejections = 0;
 
   bool get isRunning => _running;
   DateTime? get lastSuccessAt => _lastSuccessAt;
@@ -58,6 +69,11 @@ class HeartbeatService {
   void start() {
     if (_running) return;
     _running = true;
+
+    // A restart is a fresh chance: whatever made the store reject us last time
+    // may well have been fixed, and re-pairing should not be the only cure.
+    _consecutiveRejections = 0;
+
     final interval = _settings.current.heartbeatInterval;
     _timer?.cancel();
     _timer = Timer.periodic(interval, (Timer _) => unawaited(beat()));
@@ -75,6 +91,45 @@ class HeartbeatService {
   }
 
   void setPaused({required bool paused}) => _paused = paused;
+
+  /// Handles the store rejecting a heartbeat with 401 or 403.
+  ///
+  /// The heartbeat keeps running through the first few rejections. That matters
+  /// because the *server* is the authority on whether this agent is still
+  /// allowed — it reports that as a field on `GET /agents/me` — whereas a bare
+  /// status code only tells us this one request failed, and there are many
+  /// mundane reasons for that.
+  ///
+  /// Only a sustained run of rejections is treated as a real revocation.
+  bool _onRejected(AppException error) {
+    _consecutiveRejections++;
+    _session.markOffline();
+
+    if (_consecutiveRejections < _maxConsecutiveRejections) {
+      _logger?.warn(
+        LogCategory.agent,
+        'Heartbeat rejected; will keep trying',
+        context: <String, Object?>{
+          'code': error.code,
+          'attempt': _consecutiveRejections,
+          'of': _maxConsecutiveRejections,
+        },
+      );
+
+      return false;
+    }
+
+    _logger?.error(
+      LogCategory.agent,
+      'Heartbeat rejected $_consecutiveRejections times in a row — this agent '
+      'appears to have been revoked. Re-pair it from your store.',
+      context: <String, Object?>{'code': error.code},
+    );
+
+    stop();
+
+    return false;
+  }
 
   /// Sends one heartbeat. Never throws — a missed beat is not an incident.
   Future<bool> beat() async {
@@ -100,6 +155,7 @@ class HeartbeatService {
         unawaited(_agentDao.touchHeartbeat(agent.id, _lastSuccessAt!));
       }
       _session.markSyncSuccess();
+      _consecutiveRejections = 0;
 
       // Remember what we last sent so a printer change can be pushed
       // immediately rather than waiting for the next beat.
@@ -109,10 +165,10 @@ class HeartbeatService {
         await _dispatch(command);
       }
       return true;
-    } on AuthException {
-      // AgentSession has already flipped to "unauthorised"; stop beating.
-      stop();
-      return false;
+    } on AuthException catch (e) {
+      return _onRejected(e);
+    } on ForbiddenException catch (e) {
+      return _onRejected(e);
     } on AppException catch (e) {
       _logger?.debug(
         LogCategory.agent,

@@ -94,17 +94,50 @@ Future<void> main(List<String> arguments) async {
   // only ended from the tray "Exit" item or when close-to-tray is off.
   await windowManager.setPreventClose(settings.closeToTray);
 
-  controller
-    ..onShowWindow = showWindow
-    ..onExitRequested = () async {
-      logger.info(LogCategory.app, 'Exit requested');
-      await controller.stop();
-      await tray.dispose();
-      await disposeDependencies();
+  // Exiting must always work, first time. A graceful shutdown waits on network
+  // calls, printer polling and a database close, any of which can hang — and
+  // when it did, pressing Exit appeared to do nothing and the operator pressed
+  // it again, stacking another shutdown behind the stuck one. So the tidy path
+  // gets a deadline, and the process ends either way.
+  var exiting = false;
+
+  Future<void> forceExit() async {
+    try {
       guard.release();
       await windowManager.setPreventClose(false);
       await windowManager.destroy();
-      exit(0);
+    } catch (_) {
+      // Nothing left worth reporting; the exit below is unconditional.
+    }
+    exit(0);
+  }
+
+  controller
+    ..onShowWindow = showWindow
+    ..onExitRequested = () async {
+      // A second press while the first is still unwinding must not start over.
+      if (exiting) {
+        logger.info(LogCategory.app, 'Exit already in progress');
+        return;
+      }
+      exiting = true;
+
+      logger.info(LogCategory.app, 'Exit requested');
+
+      try {
+        await Future.any(<Future<void>>[
+          () async {
+            await controller.stop();
+            await tray.dispose();
+            await disposeDependencies();
+          }(),
+          Future<void>.delayed(const Duration(seconds: 5)),
+        ]);
+      } catch (e, st) {
+        logger.exception(LogCategory.app, 'Error during shutdown', e, st);
+      }
+
+      await forceExit();
     };
 
   await tray.initialise();

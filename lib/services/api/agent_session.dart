@@ -249,11 +249,27 @@ class AgentSession {
           continue;
         } on RateLimitException {
           await Future<void>.delayed(const Duration(seconds: 5));
+
+          // Yield before looping. In an `async*` generator, cancellation is
+          // only observed at a suspension point — a bare `continue` never
+          // reaches one, so closing the pairing screen would leave this loop
+          // polling the store for the rest of the timeout.
+          yield PairingProgress(
+            state: PairingState.pending,
+            session: session,
+            message: 'Your store is busy — still waiting…',
+          );
           continue;
         }
 
         switch (status.state) {
           case PairingState.pending:
+            // Same reason: this yield is what makes cancel() take effect.
+            yield PairingProgress(
+              state: PairingState.pending,
+              session: session,
+              message: 'Waiting for approval in your store…',
+            );
             continue;
 
           case PairingState.approved:
@@ -419,9 +435,22 @@ class AgentSession {
     } on AuthException {
       await _handleUnauthorised();
       return false;
-    } on ForbiddenException {
-      await _markStatus(AgentStatus.disabled);
-      _setState(AgentConnectionState.unauthorised);
+    } on ForbiddenException catch (e) {
+      // Deliberately *not* marking the agent disabled here. A 403 says this
+      // request was refused, not that the store has switched this machine off —
+      // a WAF rule, a Cloudflare challenge or a permissions hiccup all look
+      // identical from here, and recording "disabled" from one of them left the
+      // app permanently convinced it had been revoked when it had not.
+      //
+      // The store reports the real lifecycle state as a field on the agent
+      // record, which the success path above already honours. Until we see that
+      // field say otherwise, treat this as a connectivity problem.
+      _logger?.warn(
+        LogCategory.auth,
+        'Store refused the agent verification request',
+        context: <String, Object?>{'detail': e.technicalDetail},
+      );
+      _setState(AgentConnectionState.offline);
       return false;
     } on NetworkException {
       _setState(AgentConnectionState.offline);
