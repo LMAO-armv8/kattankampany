@@ -66,13 +66,25 @@ class ConnectivityMonitor {
           final hasInterface = results.any(
             (ConnectivityResult r) => r != ConnectivityResult.none,
           );
+          // Verify in *both* directions. This used to trust "no interface" and
+          // only probe when an interface came up, which made the OS signal
+          // authoritative for going offline and merely advisory for coming
+          // back. connectivity_plus on Windows reports `none` spuriously —
+          // most often when Windows power-manages the adapter on an idle
+          // machine — so the agent announced itself offline while the store was
+          // perfectly reachable, stopped beating, and appeared dead in wp-admin
+          // until somebody touched the PC.
+          //
+          // The probe is a single TCP connect to the paired store and is the
+          // only thing that actually answers the question being asked.
           if (!hasInterface) {
-            _update(NetworkStatus.offline, reason: 'no network interface');
-          } else {
-            // An interface came up — verify it actually reaches the store
-            // before telling the rest of the app we are online.
-            unawaited(probe());
+            _logger?.debug(
+              LogCategory.api,
+              'OS reports no network interface — verifying before believing it',
+            );
           }
+
+          unawaited(probe());
         },
         onError: (Object error) {
           _logger?.debug(
