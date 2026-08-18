@@ -5,6 +5,7 @@ import '../../core/config/settings_repository.dart';
 import '../../core/logging/app_logger.dart';
 import '../../core/logging/log_level.dart';
 import '../../core/network/connectivity_monitor.dart';
+import '../../core/platform/power_request.dart';
 import '../../features/agent/domain/agent.dart';
 import '../../features/print_queue/domain/print_job.dart';
 import '../api/agent_session.dart';
@@ -85,6 +86,7 @@ class LifecycleController {
     required AutostartService autostart,
     required UpdateService updater,
     TrayService? tray,
+    PowerRequest? power,
     AppLogger? logger,
   })  : _session = session,
         _settings = settings,
@@ -98,6 +100,7 @@ class LifecycleController {
         _autostart = autostart,
         _updater = updater,
         _tray = tray,
+        _power = power ?? PowerRequest(logger: logger),
         _logger = logger;
 
   final AgentSession _session;
@@ -112,6 +115,7 @@ class LifecycleController {
   final AutostartService _autostart;
   final UpdateService _updater;
   final TrayService? _tray;
+  final PowerRequest _power;
   final AppLogger? _logger;
 
   final StreamController<AgentRuntimeStatus> _statusController =
@@ -268,6 +272,7 @@ class LifecycleController {
       await subscription.cancel();
     }
     _subscriptions.clear();
+    _power.release();
     _started = false;
   }
 
@@ -374,6 +379,7 @@ class LifecycleController {
   Future<void> _applySettings(AppSettings settings) async {
     _logger?.minimumLevel = settings.logLevel;
     _tray?.closeToTray = settings.closeToTray;
+    _power.setEnabled(enabled: settings.keepComputerAwake);
 
     if (_autostart.isSupported) {
       final enabled = await _autostart.isEnabled();

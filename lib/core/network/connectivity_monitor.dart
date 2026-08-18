@@ -50,6 +50,7 @@ class ConnectivityMonitor {
   String? _host;
   int? _port;
   DateTime? _lastOnlineAt;
+  DateTime? _lastTickAt;
 
   NetworkStatus get status => _status;
   DateTime? get lastOnlineAt => _lastOnlineAt;
@@ -104,7 +105,9 @@ class ConnectivityMonitor {
     }
 
     _probeTimer?.cancel();
+    _lastTickAt = DateTime.now();
     _probeTimer = Timer.periodic(_probeInterval, (Timer _) {
+      _noteTick();
       unawaited(probe());
     });
     await probe();
@@ -124,6 +127,38 @@ class ConnectivityMonitor {
       _host = null;
       _port = null;
     }
+  }
+
+  /// Records that the probe timer fired, and says so in the log when far more
+  /// wall-clock time passed than the interval allows for.
+  ///
+  /// A timer that should fire every 30 s but last fired three hours ago means
+  /// the process was frozen, which on Windows 11 means the machine went into
+  /// Modern Standby. That is worth naming explicitly: without it the log shows
+  /// only a long unexplained stretch of "offline", and the obvious reading —
+  /// that the agent or the store is at fault — is the wrong one.
+  void _noteTick() {
+    final previous = _lastTickAt;
+    final now = DateTime.now();
+    _lastTickAt = now;
+    if (previous == null) return;
+
+    final elapsed = now.difference(previous);
+    if (elapsed < _probeInterval * 4) return;
+
+    _logger?.info(
+      LogCategory.api,
+      'This computer was asleep for about ${_describe(elapsed)} — no print '
+      'jobs could arrive during that time. Turn on "Keep this computer awake" '
+      'in Settings to stop it happening.',
+      context: <String, Object?>{'asleep_seconds': elapsed.inSeconds},
+    );
+  }
+
+  static String _describe(Duration d) {
+    if (d.inHours >= 1) return '${d.inHours}h ${d.inMinutes % 60}m';
+    if (d.inMinutes >= 1) return '${d.inMinutes}m';
+    return '${d.inSeconds}s';
   }
 
   /// One reachability check. Cheap enough to run every 30 s indefinitely.

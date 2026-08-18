@@ -87,8 +87,18 @@ abstract final class ApiExceptionMapper {
     StackTrace? stackTrace,
   }) {
     final serverMessage = _serverMessage(response);
-    final enriched =
-        serverMessage == null ? detail : '$detail | server: $serverMessage';
+    final serverCode = _serverCode(response);
+
+    // The machine-readable code is carried alongside the message because the
+    // message is prose: it gets reworded, translated, and is useless for
+    // deciding anything. Callers that must distinguish "this agent is revoked"
+    // from "that job is not yours" need the code, and so does anyone reading the
+    // log afterwards.
+    final enriched = <String>[
+      if (detail != null && detail.isNotEmpty) detail,
+      if (serverCode != null) 'code: $serverCode',
+      if (serverMessage != null) 'server: $serverMessage',
+    ].join(' | ');
 
     switch (status) {
       case 400:
@@ -175,7 +185,17 @@ abstract final class ApiExceptionMapper {
     }
   }
 
-  /// The WordPress REST error envelope: `{ code, message, data: { status } }`.
+  /// The WordPress REST error envelope is `{ code, message, data: { status } }`.
+  /// This reads its `code`, e.g. `wpm_agent_disabled`.
+  static String? _serverCode(Response<dynamic>? response) {
+    final data = response?.data;
+    if (data is Map) {
+      final code = data['code'];
+      if (code is String && code.isNotEmpty) return code;
+    }
+    return null;
+  }
+
   static String? _serverMessage(Response<dynamic>? response) {
     final data = response?.data;
     if (data is Map) {

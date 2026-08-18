@@ -65,6 +65,13 @@ class AppSettings with _$AppSettings {
     /// Closing the window keeps the agent running in the tray. Turning this off
     /// means the X button really does stop printing.
     @Default(true) bool closeToTray,
+
+    /// Ask Windows not to sleep while the agent is running.
+    ///
+    /// On by default because an agent that only receives orders while somebody
+    /// is at the keyboard is not doing its job. Turn it off on a laptop that
+    /// should sleep on battery.
+    @Default(true) bool keepComputerAwake,
     @Default(AppThemeMode.system) AppThemeMode themeMode,
 
     // ---- Connection -------------------------------------------------------

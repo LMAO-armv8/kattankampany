@@ -33,6 +33,11 @@ enum PrinterResolutionSource {
 
   /// No instruction and no configured default — the Windows default was used.
   windowsDefault,
+
+  /// No instruction, no configured default, no Windows default — but exactly
+  /// one printer on this computer could take the job, so there was nothing to
+  /// choose between.
+  soleCandidate,
 }
 
 final class ResolvedPrinter extends PrinterResolution {
@@ -130,8 +135,35 @@ class PrinterResolver {
       );
     }
 
-    // 4 — nothing usable.
+    // 4 — exactly one printer can take the job.
+    //
+    // This is not a substitution: the server named nothing, so there is no
+    // instruction to override, and with a single candidate there is no choice
+    // to get wrong. Without this an agent with one printer and no default
+    // configured refuses every unrouted job with "no printer is available",
+    // which reads as a fault when the machine is plainly ready to print. A
+    // network printer added by hand is the common case — it is nobody's Windows
+    // default, so steps 2 and 3 both pass it by.
+    final candidates = printers
+        .where((PrinterDevice p) => p.canAcceptJobs)
+        .toList(growable: false);
+    if (candidates.length == 1) {
+      return ResolvedPrinter(
+        candidates.single,
+        PrinterResolutionSource.soleCandidate,
+      );
+    }
+
+    // 5 — nothing usable, or too many to pick from without being told.
     if (configuredDefault != null) return _notUsable(configuredDefault);
+    if (candidates.length > 1) {
+      return const UnavailablePrinter(
+        errorCode: ErrorCodes.printerNotFound,
+        message: 'This computer has more than one printer and none is set as '
+            'the default. Choose a default printer in Settings, or assign a '
+            'printer to this document in your store.',
+      );
+    }
     return const UnavailablePrinter(
       errorCode: ErrorCodes.printerNotFound,
       message: 'No printer is available. Choose a default printer in Settings, '

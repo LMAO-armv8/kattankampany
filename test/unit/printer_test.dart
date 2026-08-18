@@ -429,6 +429,46 @@ void main() {
       );
     });
 
+    test('uses the only printer there is when nothing was requested', () {
+      // A hand-added network printer is nobody's Windows default, so without
+      // this the agent refuses every unrouted job on a machine that has exactly
+      // one printer sitting ready.
+      final result = resolver.resolve(
+        job: buildJob(storeId: 's'),
+        printers: <PrinterDevice>[device('net://10.0.0.5:9100')],
+        settings: settings,
+      );
+      expect(
+        (result as ResolvedPrinter).source,
+        PrinterResolutionSource.soleCandidate,
+      );
+      expect(result.device.printerKey, 'net://10.0.0.5:9100');
+    });
+
+    test('the sole printer must still be usable', () {
+      final result = resolver.resolve(
+        job: buildJob(storeId: 's'),
+        printers: <PrinterDevice>[
+          device('net://10.0.0.5:9100', state: PrinterState.offline),
+        ],
+        settings: settings,
+      );
+      expect(result, isA<UnavailablePrinter>());
+    });
+
+    test('two printers and no default is still a refusal, not a guess', () {
+      final result = resolver.resolve(
+        job: buildJob(storeId: 's'),
+        printers: <PrinterDevice>[device('Office'), device('Thermal')],
+        settings: settings,
+      );
+      expect(result, isA<UnavailablePrinter>());
+      expect(
+        (result as UnavailablePrinter).message,
+        contains('more than one printer'),
+      );
+    });
+
     test('reports a clear message when nothing is usable', () {
       final result = resolver.resolve(
         job: buildJob(storeId: 's'),

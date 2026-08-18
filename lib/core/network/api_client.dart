@@ -140,7 +140,19 @@ class ApiClient {
         'detail': mapped.technicalDetail,
       },
     );
-    if (mapped is AuthException || mapped is ForbiddenException) {
+    // Only 401 is evidence about the *credentials*. A 403 says this particular
+    // request was refused, which is a per-request authorisation decision and
+    // routinely about the resource rather than the caller — a job that belongs
+    // to another agent, a document that is not ours to fetch.
+    //
+    // Escalating every 403 to "re-pair required" meant one such refusal tore
+    // down a perfectly good session: the agent wiped its state, went offline and
+    // told the operator it had been disabled in the store, while the store still
+    // listed it as enabled. A revocation the store actually performed still
+    // arrives as 401, or as an explicit agent-level code below.
+    if (mapped is AuthException) {
+      onUnauthorized?.call(mapped);
+    } else if (mapped is ForbiddenException && _isAgentRevoked(mapped)) {
       onUnauthorized?.call(mapped);
     }
     handler.reject(
@@ -269,6 +281,27 @@ class ApiClient {
           'Expected a JSON object from ${response.requestOptions.path}, '
           'received ${data.runtimeType}.',
     );
+  }
+
+  /// Whether a 403 is the store saying *this agent* is no longer allowed, as
+  /// opposed to refusing one particular request.
+  ///
+  /// Matched on the error code rather than the message so it survives wording
+  /// changes and translation. Anything unrecognised is treated as a per-request
+  /// refusal, which is the safe direction: the cost of missing a real revocation
+  /// is one more rejected request, whereas the cost of a false positive is an
+  /// agent that stops printing and demands re-pairing.
+  static bool _isAgentRevoked(AppException error) {
+    const Set<String> revoked = <String>{
+      'wpm_agent_disabled',
+      'wpm_agent_revoked',
+      'agent_disabled',
+      'agent_revoked',
+    };
+
+    final detail = error.technicalDetail?.toLowerCase() ?? '';
+
+    return revoked.any(detail.contains);
   }
 
   static int? _elapsedMs(RequestOptions options) {

@@ -61,6 +61,16 @@ class SettingsScreen extends ConsumerWidget {
                 onChanged: (bool value) =>
                     save(settings.copyWith(closeToTray: value)),
               ),
+              _SwitchRow(
+                label: 'Keep this computer awake',
+                description: 'Recommended. Windows sleeps an idle computer '
+                    'within minutes, which takes the agent offline until '
+                    'somebody touches the keyboard. Turn this off on a laptop '
+                    'that should sleep on battery.',
+                value: settings.keepComputerAwake,
+                onChanged: (bool value) =>
+                    save(settings.copyWith(keepComputerAwake: value)),
+              ),
               _DropdownRow<AppThemeMode>(
                 label: 'Appearance',
                 value: settings.themeMode,
