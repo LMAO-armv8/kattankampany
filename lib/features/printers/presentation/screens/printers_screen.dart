@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -7,6 +9,7 @@ import '../../../../core/widgets/section_card.dart';
 import '../../../../core/widgets/status_pill.dart';
 import '../../../../features/printing/domain/print_request.dart';
 import '../../../../routing/app_shell.dart';
+import '../../domain/network_printer.dart';
 import '../../domain/print_profile.dart';
 import '../../domain/printer_device.dart';
 import '../../domain/printer_status.dart';
@@ -26,6 +29,31 @@ class PrintersScreen extends ConsumerStatefulWidget {
 class _PrintersScreenState extends ConsumerState<PrintersScreen> {
   /// Null means "all transports".
   PrinterConnectionType? _filter;
+
+  /// Adds a printer addressed directly over TCP, without Windows.
+  ///
+  /// This is the escape hatch for the two cases the spooler cannot serve: a
+  /// machine whose Print Spooler is stopped or disabled, and a network printer
+  /// nobody has installed a driver for.
+  Future<void> _addNetworkPrinter() async {
+    final printer = await showDialog<NetworkPrinter>(
+      context: context,
+      builder: (BuildContext context) => const _AddNetworkPrinterDialog(),
+    );
+
+    if (printer == null || !mounted) return;
+
+    await ref.read(networkPrinterStoreProvider).save(printer);
+    await ref.read(lifecycleProvider).refreshPrinters();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Added ${printer.name} at ${printer.host}:${printer.port}'),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -60,6 +88,11 @@ class _PrintersScreenState extends ConsumerState<PrintersScreen> {
                   '${manager.windowsDefaultKey == null ? '' : ' · Windows default: ${manager.windowsDefaultKey}'}',
           actions: <Widget>[
             TextButton.icon(
+              onPressed: _addNetworkPrinter,
+              icon: const Icon(Icons.lan_outlined, size: 16),
+              label: const Text('Add network printer'),
+            ),
+            TextButton.icon(
               onPressed: () => ref.read(lifecycleProvider).refreshPrinters(),
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('Refresh'),
@@ -72,13 +105,22 @@ class _PrintersScreenState extends ConsumerState<PrintersScreen> {
                       ? 'No printers found'
                       : 'Printing is unavailable on this platform',
                   message: manager.isSupported
+                      // Naming the spooler matters. Windows reporting nothing
+                      // at all usually means the Print Spooler service is
+                      // stopped or disabled — common on hardened and corporate
+                      // machines — and no amount of re-checking the cable will
+                      // fix that. The network option below needs neither.
                       ? 'Windows is not reporting any printers to this agent. '
-                          'USB, Bluetooth and network printers all appear here '
-                          'once they are installed in Windows. Check that the '
-                          'printer is installed and switched on, then choose '
-                          'Refresh.'
-                      : 'This build prints through the Windows spooler. Run the '
-                          'agent on Windows to discover printers.',
+                          'USB and Bluetooth printers appear here once they are '
+                          'installed in Windows and the Print Spooler service '
+                          'is running.\n\n'
+                          'If Windows shows no printers either, check that the '
+                          'Print Spooler service is running. A network printer '
+                          'can be added directly instead — that path does not '
+                          'use Windows printing at all.'
+                      : 'This build uses the Windows spooler for local printers. '
+                          'You can still add a network printer, which the agent '
+                          'talks to directly.',
                 )
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -452,6 +494,191 @@ class _Meta extends StatelessWidget {
             color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// Collects the address of a printer the agent will speak to directly.
+///
+/// Deliberately asks for an address rather than offering a scan. Sweeping a
+/// subnet for open port 9100 is slow, looks like a port scan to any competent
+/// network monitor, and on a corporate network is a good way to get the agent
+/// blocked. An operator reading the address off the printer's own configuration
+/// page is faster and less alarming.
+class _AddNetworkPrinterDialog extends StatefulWidget {
+  const _AddNetworkPrinterDialog();
+
+  @override
+  State<_AddNetworkPrinterDialog> createState() =>
+      _AddNetworkPrinterDialogState();
+}
+
+class _AddNetworkPrinterDialogState extends State<_AddNetworkPrinterDialog> {
+  final TextEditingController _address = TextEditingController();
+  final TextEditingController _name = TextEditingController();
+
+  String? _error;
+  bool _testing = false;
+  String? _testResult;
+  bool _testPassed = false;
+
+  @override
+  void dispose() {
+    _address.dispose();
+    _name.dispose();
+    super.dispose();
+  }
+
+  NetworkPrinter? _parsed() => NetworkPrinter.parse(
+        _address.text,
+        name: _name.text.isEmpty ? null : _name.text,
+      );
+
+  /// Connects before saving. Discovering the address is wrong at save time is
+  /// far kinder than discovering it when the first real order fails to print.
+  Future<void> _test() async {
+    final printer = _parsed();
+
+    if (printer == null || !printer.isValid) {
+      setState(() => _error = 'Enter an address such as 192.168.1.50 or 192.168.1.50:9100');
+      return;
+    }
+
+    setState(() {
+      _testing = true;
+      _error = null;
+      _testResult = null;
+    });
+
+    String message;
+    var passed = false;
+
+    try {
+      final socket = await Socket.connect(
+        printer.host,
+        printer.port,
+        timeout: const Duration(seconds: 5),
+      );
+      socket.destroy();
+      message = 'Connected to ${printer.host}:${printer.port}.';
+      passed = true;
+    } on SocketException catch (e) {
+      message = 'No answer from ${printer.host}:${printer.port}. ${e.message}';
+    } catch (e) {
+      message = 'Could not reach ${printer.host}:${printer.port}. $e';
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _testing = false;
+      _testResult = message;
+      _testPassed = passed;
+    });
+  }
+
+  void _save() {
+    final printer = _parsed();
+
+    if (printer == null || !printer.isValid) {
+      setState(() => _error = 'Enter an address such as 192.168.1.50 or 192.168.1.50:9100');
+      return;
+    }
+
+    Navigator.of(context).pop(printer);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return AlertDialog(
+      title: const Text('Add a network printer'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'The agent will send documents straight to this address over the '
+              'network. It does not use Windows printing, so this works even '
+              'when the Print Spooler is disabled.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _address,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Address',
+                hintText: '192.168.1.50  or  192.168.1.50:9100',
+                helperText: 'Port 9100 is assumed if you do not give one.',
+              ),
+              onChanged: (_) => setState(() {
+                _error = null;
+                _testResult = null;
+              }),
+              onSubmitted: (_) => _save(),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _name,
+              decoration: const InputDecoration(
+                labelText: 'Name (optional)',
+                hintText: 'Warehouse label printer',
+              ),
+              onSubmitted: (_) => _save(),
+            ),
+            if (_error != null) ...<Widget>[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.colorScheme.error),
+              ),
+            ],
+            if (_testResult != null) ...<Widget>[
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Icon(
+                    _testPassed ? Icons.check_circle_outline : Icons.error_outline,
+                    size: 16,
+                    color: _testPassed
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.error,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(_testResult!, style: theme.textTheme.bodySmall),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 16),
+            Text(
+              'The document is sent exactly as produced, with no driver to '
+              'translate it. Make sure your print rules send this printer a '
+              'format it understands.',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.textTheme.bodySmall?.color?.withValues(alpha: 0.7)),
+            ),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: _testing ? null : _test,
+          child: Text(_testing ? 'Testing…' : 'Test connection'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('Add')),
       ],
     );
   }

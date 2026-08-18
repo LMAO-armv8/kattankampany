@@ -9,6 +9,9 @@ import '../../services/background/heartbeat_service.dart';
 import '../../services/background/lifecycle_controller.dart';
 import '../../services/background/sync_service.dart';
 import '../../services/background/tray_service.dart';
+import '../../services/printer/composite_printer_service.dart';
+import '../../services/printer/network/network_printer_service.dart';
+import '../../services/printer/network/network_printer_store.dart';
 import '../../services/printer/printer_manager.dart';
 import '../../services/printer/printer_service.dart';
 import '../../services/printer/strategies/escpos_print_strategy.dart';
@@ -141,16 +144,36 @@ Future<void> configureDependencies({
     ]);
   });
 
+  sl
+    ..registerLazySingleton<NetworkPrinterStore>(
+      () => NetworkPrinterStore(settings: sl<SettingsDao>(), logger: logger),
+    )
+    ..registerLazySingleton<NetworkPrinterService>(
+      () => NetworkPrinterService(
+        printers: () => sl<NetworkPrinterStore>().all(),
+        logger: logger,
+      ),
+    );
+
   sl.registerLazySingleton<PrinterService>(() {
-    if (!Platform.isWindows) {
-      return const UnsupportedPrinterService(
-        reason: 'This build prints through the Windows spooler. '
-            'Printing is disabled on this platform.',
-      );
-    }
-    return WindowsPrinterService(
-      spooler: sl<WindowsSpooler>(),
-      strategies: sl<PrintStrategyRegistry>(),
+    final platform = Platform.isWindows
+        ? WindowsPrinterService(
+            spooler: sl<WindowsSpooler>(),
+            strategies: sl<PrintStrategyRegistry>(),
+            logger: logger,
+          )
+        : const UnsupportedPrinterService(
+            reason: 'This build prints through the Windows spooler. '
+                'Printing is disabled on this platform.',
+          );
+
+    // Network printers are deliberately outside the platform branch. They are
+    // reached over a plain TCP socket, so they work on any host and — more
+    // importantly — on a Windows machine whose Print Spooler is stopped or
+    // disabled, which is common on hardened and corporate-managed PCs.
+    return CompositePrinterService(
+      platform: platform,
+      network: sl<NetworkPrinterService>(),
       logger: logger,
     );
   });

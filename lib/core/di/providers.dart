@@ -9,6 +9,7 @@ import '../../features/printers/domain/printer_device.dart';
 import '../../services/api/agent_session.dart';
 import '../../services/background/lifecycle_controller.dart';
 import '../../services/background/sync_service.dart';
+import '../../services/printer/network/network_printer_store.dart';
 import '../../services/printer/printer_manager.dart';
 import '../../services/queue/queue_engine.dart';
 import '../../services/queue/queue_repository.dart';
@@ -33,6 +34,10 @@ import 'service_locator.dart';
 
 final Provider<LifecycleController> lifecycleProvider =
     Provider<LifecycleController>((Ref ref) => sl<LifecycleController>());
+
+/// The operator's list of directly-addressed network printers.
+final Provider<NetworkPrinterStore> networkPrinterStoreProvider =
+    Provider<NetworkPrinterStore>((Ref ref) => sl<NetworkPrinterStore>());
 
 final Provider<AgentSession> agentSessionProvider =
     Provider<AgentSession>((Ref ref) => sl<AgentSession>());
