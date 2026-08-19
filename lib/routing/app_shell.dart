@@ -283,6 +283,16 @@ class _StatusHeader extends ConsumerWidget {
             onPressed: () => controller.syncNow(),
             icon: const Icon(Icons.sync),
           ),
+          // Quitting must be reachable from the window. The close button hides
+          // to the notification area so printing survives, which is right — but
+          // Windows collapses tray icons into an overflow flyout by default, so
+          // for an operator who cannot find the icon there was no way to stop
+          // the agent at all short of Task Manager.
+          IconButton(
+            tooltip: 'Quit the print agent',
+            onPressed: () => _confirmExit(context, controller),
+            icon: const Icon(Icons.power_settings_new_rounded),
+          ),
           const SizedBox(width: AppSpacing.sm),
           _LastSyncLabel(lastSyncAt: status.lastSyncAt),
         ],
@@ -322,4 +332,38 @@ String formatRelative(DateTime timestamp) {
     return '${delta.inHours} hour${delta.inHours == 1 ? '' : 's'} ago';
   }
   return '${delta.inDays} day${delta.inDays == 1 ? '' : 's'} ago';
+}
+
+/// Confirms before quitting, because quitting stops printing.
+///
+/// The queue survives — anything already claimed is handed back to the store on
+/// a clean shutdown and re-offered — but orders placed while the agent is off
+/// will simply wait, and an operator who quits by accident should be told that
+/// rather than discovering it from a customer.
+Future<void> _confirmExit(
+  BuildContext context,
+  LifecycleController controller,
+) async {
+  final quit = await showDialog<bool>(
+    context: context,
+    builder: (BuildContext context) => AlertDialog(
+      title: const Text('Quit the print agent?'),
+      content: const Text(
+        'Nothing will print until you start it again. Orders keep queueing in '
+        'your store and will print when the agent next runs.',
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Keep running'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Quit'),
+        ),
+      ],
+    ),
+  );
+
+  if (quit ?? false) await controller.onExitRequested?.call();
 }

@@ -56,6 +56,7 @@ class TrayService with TrayListener, WindowListener {
   /// Whether the window's close button hides to the tray instead of quitting.
   set closeToTray(bool value) => _closeToTray = value;
 
+
   Future<void> initialise() async {
     if (_initialised) return;
     if (!_supportsTray) {
@@ -188,6 +189,9 @@ class TrayService with TrayListener, WindowListener {
 
   Future<void> showWindow() async {
     try {
+      // Put the taskbar button back before showing, so the window the operator
+      // just asked for arrives with somewhere to click next time.
+      await windowManager.setSkipTaskbar(false);
       await windowManager.show();
       await windowManager.focus();
       if (await windowManager.isMinimized()) {
@@ -205,6 +209,11 @@ class TrayService with TrayListener, WindowListener {
   Future<void> hideWindow() async {
     try {
       await windowManager.hide();
+      // Without this the taskbar button survives the hide on Windows. Clicking
+      // it then does nothing, because the window it points at is hidden — so the
+      // agent looks like an application that refuses to close, and the operator
+      // ends up killing it from Task Manager.
+      await windowManager.setSkipTaskbar(true);
     } catch (_) {
       /* non-fatal */
     }
@@ -257,6 +266,7 @@ class TrayService with TrayListener, WindowListener {
       _onAction(TrayAction.exit);
     }
   }
+
 
   @override
   void onWindowMinimize() {

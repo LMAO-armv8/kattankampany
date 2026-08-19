@@ -224,9 +224,14 @@ class PrintJob with _$PrintJob {
       }
     }
 
+    // A stored zero is "never set", not midnight on 1 January 1970. Rows written
+    // before the store stopped serialising its unset-datetime default carry it,
+    // and rendering that literally is how a job queued a minute ago showed up in
+    // the queue as "added 20684 days ago".
     DateTime? at(String column) {
       final value = row[column] as int?;
-      return value == null ? null : DateTime.fromMillisecondsSinceEpoch(value);
+      if (value == null || value <= 0) return null;
+      return DateTime.fromMillisecondsSinceEpoch(value);
     }
 
     return PrintJob(

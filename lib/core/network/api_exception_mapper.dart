@@ -118,7 +118,25 @@ abstract final class ApiExceptionMapper {
           stackTrace: stackTrace,
         );
       case 403:
+        // Which of the two meanings of 403 this is, decided on the store's
+        // error code rather than on its prose so it survives rewording and
+        // translation. Anything unrecognised is treated as a refusal of this
+        // one request, which is the safe direction: the cost of missing a real
+        // revocation is one more rejected request, whereas the cost of a false
+        // positive is an agent that stops printing and tells the operator to go
+        // and re-enable something that was never disabled.
+        if (_agentRevokedCodes.contains(serverCode)) {
+          return ForbiddenException.agentDisabled(
+            technicalDetail: enriched,
+            cause: cause,
+            stackTrace: stackTrace,
+          );
+        }
         return ForbiddenException(
+          userMessage: serverMessage ??
+              'Your store refused this request. It will be retried; if it '
+                  'keeps happening, check the print agent in your store '
+                  'settings.',
           technicalDetail: enriched,
           cause: cause,
           stackTrace: stackTrace,
@@ -169,6 +187,15 @@ abstract final class ApiExceptionMapper {
         );
     }
   }
+
+  /// Store error codes that mean *this agent* is no longer allowed, as opposed
+  /// to this one request being refused.
+  static const Set<String> _agentRevokedCodes = <String>{
+    'wpm_agent_disabled',
+    'wpm_agent_revoked',
+    'agent_disabled',
+    'agent_revoked',
+  };
 
   /// Reads `Retry-After`, which may be seconds or an HTTP date.
   static Duration? parseRetryAfter(Response<dynamic>? response) {

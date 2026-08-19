@@ -67,13 +67,26 @@ class RemotePrintJob {
               (json['copies'] as num?)?.toInt() ??
               1)
           .clamp(1, 100),
-      createdAt: json['created_at'] == null
-          ? null
-          : DateTime.tryParse(json['created_at'] as String)?.toLocal(),
+      createdAt: _parseTimestamp(json['created_at']),
       metadata: metadataRaw is Map
           ? metadataRaw.cast<String, dynamic>()
           : const <String, dynamic>{},
     );
+  }
+
+  /// Parses a server timestamp, rejecting the Unix epoch.
+  ///
+  /// A store whose schema defaults an unset datetime column to
+  /// `1970-01-01 00:00:00` serialises that as a real timestamp, and taking it at
+  /// face value made freshly queued jobs read as decades old. No print job is
+  /// legitimately older than the software, so anything at or before 1971 is
+  /// treated as absent and the local clock is used instead.
+  static DateTime? _parseTimestamp(Object? raw) {
+    if (raw is! String || raw.isEmpty) return null;
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return null;
+    if (parsed.isBefore(DateTime.utc(1971))) return null;
+    return parsed.toLocal();
   }
 
   /// Converts to the local queue representation.

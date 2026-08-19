@@ -94,6 +94,29 @@ void main() {
         expect(e.technicalDetail, contains('wpm_document_not_owned'));
       }
     });
+
+    test('does not tell the operator the agent was disabled', () async {
+      // The message the operator actually reads. Escalation and wording are
+      // separate failures: stopping the teardown still left the agent claiming
+      // it had been switched off in a store that had done no such thing.
+      store
+        ..status = 403
+        ..code = 'wpm_document_not_owned'
+        ..message = 'This print job belongs to another agent.';
+
+      try {
+        await client.getJson('/print-jobs/14/document');
+        fail('expected a ForbiddenException');
+      } on ForbiddenException catch (e) {
+        expect(e.agentRevoked, isFalse);
+        expect(e.userMessage, isNot(contains('disabled')));
+        expect(
+          e.userMessage,
+          'This print job belongs to another agent.',
+          reason: "the store's own message is clearer than a generic one",
+        );
+      }
+    });
   });
 
   group('a 403 about the agent', () {
@@ -105,7 +128,13 @@ void main() {
 
       await expectLater(
         client.getJson('/agents/me'),
-        throwsA(isA<ForbiddenException>()),
+        throwsA(
+          isA<ForbiddenException>()
+              .having((ForbiddenException e) => e.agentRevoked, 'agentRevoked',
+                  isTrue,)
+              .having((ForbiddenException e) => e.userMessage, 'userMessage',
+                  contains('disabled'),),
+        ),
       );
 
       expect(

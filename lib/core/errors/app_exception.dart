@@ -106,15 +106,43 @@ class AuthException extends AppException {
   bool get isRetryable => false;
 }
 
+/// The store refused one request.
+///
+/// The default wording deliberately does **not** say the agent has been
+/// disabled. Most 403s are about the resource — a job another machine holds, a
+/// document that is not ours — and telling the operator their agent had been
+/// switched off sent them to wp-admin to fix something that was never broken.
+/// The mapper substitutes the store's own message when there is one, and
+/// [ForbiddenException.agentDisabled] carries the stronger claim for the case
+/// where the store actually said so.
 class ForbiddenException extends AppException {
   const ForbiddenException({
     super.code = ErrorCodes.forbidden,
     super.userMessage =
-        'This agent has been disabled in your store. Ask an administrator to re-enable it.',
+        'Your store refused this request. It will be retried; if it keeps '
+            'happening, check the print agent in your store settings.',
     super.technicalDetail,
     super.cause,
     super.stackTrace,
-  });
+  }) : agentRevoked = false;
+
+  /// The store said this agent itself is disabled or revoked.
+  ///
+  /// Only this variant justifies stopping work and asking for re-pairing, so it
+  /// is constructed solely from an agent-level error code the store sent.
+  const ForbiddenException.agentDisabled({
+    super.code = ErrorCodes.forbidden,
+    super.userMessage =
+        'This agent has been disabled in your store. Ask an administrator to '
+            're-enable it.',
+    super.technicalDetail,
+    super.cause,
+    super.stackTrace,
+  }) : agentRevoked = true;
+
+  /// Whether the store said the *caller* is not allowed, rather than refusing
+  /// this one request.
+  final bool agentRevoked;
 
   @override
   bool get isRetryable => false;
