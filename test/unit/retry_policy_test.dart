@@ -49,9 +49,18 @@ void main() {
         reason: 'A rejected token will still be rejected next time',
       );
       expect(exact.shouldRetryError(const NotFoundException(), 1), isFalse);
-      expect(exact.shouldRetryError(const ConflictException(), 1), isFalse);
+      expect(
+        exact.shouldRetryError(const ForbiddenException.agentDisabled(), 1),
+        isFalse,
+        reason: 'Retrying cannot re-enable an agent the store switched off',
+      );
       expect(exact.shouldRetryError(const NetworkException(), 1), isTrue);
       expect(exact.shouldRetryError(const ServerException(), 1), isTrue);
+      expect(
+        exact.shouldRetryError(const ConflictException(), 1),
+        isTrue,
+        reason: 'A claim held by another agent is released when its lease ends',
+      );
     });
 
     test('jitter stays within the configured band', () {

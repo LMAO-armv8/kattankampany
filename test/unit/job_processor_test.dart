@@ -58,6 +58,61 @@ void main() {
     return job;
   }
 
+  group('print history', () {
+    test('a successful print appears in history straight away', () async {
+      // History used to be filled only by the retention sweep, which archives
+      // jobs old enough to leave the queue. A job printed a minute ago was
+      // therefore invisible for thirty days, and a successful print looked as
+      // though it had left no record at all.
+      final job = await enqueue();
+
+      expect(await env.queue.history(), isEmpty);
+
+      final outcome = await processor.process(job);
+
+      expect(outcome, JobOutcome.printed);
+
+      final history = await env.queue.history();
+      expect(history, hasLength(1));
+      expect(history.single.id, job.id);
+      expect(history.single.status, 'completed');
+      expect(history.single.succeeded, isTrue);
+    });
+
+    test('a job that gives up is recorded too', () async {
+      // What did not print, and why, is exactly what an operator opens History
+      // to find out. One attempt allowed, so the first failure is terminal
+      // rather than scheduling a retry.
+      final job = buildJob(
+        storeId: env.storeId,
+        printerKey: 'No Such Printer',
+      ).copyWith(maxAttempts: 1);
+      await env.queue.enqueue(job);
+
+      final outcome = await processor.process(job);
+
+      expect(outcome, JobOutcome.failedPermanently);
+
+      final history = await env.queue.history();
+      expect(history, hasLength(1));
+      expect(history.single.status, 'failed');
+      expect(history.single.errorCode, ErrorCodes.printerNotFound);
+    });
+
+    test('the printed document is kept so it can be opened', () async {
+      final job = await enqueue();
+
+      await processor.process(job);
+
+      final history = await env.queue.history();
+      expect(
+        history.single.documentPath,
+        isNotNull,
+        reason: 'History offers to open what actually went to the printer',
+      );
+    });
+  });
+
   group('successful print', () {
     test('runs the pipeline end to end and reports completion', () async {
       final job = await enqueue();

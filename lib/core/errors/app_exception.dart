@@ -144,8 +144,14 @@ class ForbiddenException extends AppException {
   /// this one request.
   final bool agentRevoked;
 
+  /// Worth trying again unless the store said this agent is revoked.
+  ///
+  /// A refusal about the resource — a job another machine holds, a claim that
+  /// lapsed while this agent was asleep — routinely comes right on its own, and
+  /// treating it as final meant such jobs never printed without somebody
+  /// pressing retry.
   @override
-  bool get isRetryable => false;
+  bool get isRetryable => !agentRevoked;
 }
 
 class NotFoundException extends AppException {
@@ -163,6 +169,7 @@ class NotFoundException extends AppException {
 
 /// HTTP 409 — another agent claimed the job first. Expected in multi-agent
 /// installations and deliberately *not* treated as an error condition.
+/// The store refused because of the job's current state.
 class ConflictException extends AppException {
   const ConflictException({
     super.code = ErrorCodes.conflict,
@@ -172,8 +179,12 @@ class ConflictException extends AppException {
     super.stackTrace,
   });
 
+  /// A conflict describes one instant, and the next instant may differ — a
+  /// claim lapses, a lease is reaped, the other agent goes offline. Refusing to
+  /// retry left such jobs sitting failed until somebody pressed the button, at
+  /// which point they printed first time.
   @override
-  bool get isRetryable => false;
+  bool get isRetryable => true;
 }
 
 class RateLimitException extends AppException {

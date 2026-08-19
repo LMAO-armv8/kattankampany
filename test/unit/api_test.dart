@@ -418,10 +418,19 @@ void main() {
       expect(const ServerException().isRetryable, isTrue);
       expect(const RateLimitException().isRetryable, isTrue);
       expect(const AuthException().isRetryable, isFalse);
-      expect(const ForbiddenException().isRetryable, isFalse);
       expect(const NotFoundException().isRetryable, isFalse);
-      expect(const ConflictException().isRetryable, isFalse);
       expect(const TlsValidationException().isRetryable, isFalse);
+
+      // A conflict, and a 403 about the resource, describe the job's state at
+      // one instant: a claim held elsewhere, a lease not yet reaped. Both come
+      // right on their own, and refusing to retry them left jobs failed that
+      // printed first time when an operator pressed the button by hand.
+      expect(const ConflictException().isRetryable, isTrue);
+      expect(const ForbiddenException().isRetryable, isTrue);
+
+      // A 403 the store tagged with an agent-level code is different: retrying
+      // cannot help until somebody re-enables the agent.
+      expect(const ForbiddenException.agentDisabled().isRetryable, isFalse);
     });
 
     test('offline transport errors become NetworkException, not raw sockets',

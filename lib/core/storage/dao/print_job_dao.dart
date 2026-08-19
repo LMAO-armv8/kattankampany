@@ -531,6 +531,8 @@ class PrintJobDao {
             'error_message': row['error_message'],
             'created_at': row['created_at'],
             'completed_at': row['completed_at'],
+            'document_path': row['local_file_path'],
+            'document_filename': row['document_filename'],
           },
           conflictAlgorithm: ConflictAlgorithm.replace,
         );

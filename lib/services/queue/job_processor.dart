@@ -224,15 +224,24 @@ class JobProcessor {
       );
 
       final completed = (await _queue.byId(printing.id)) ?? printing;
+
+      // History is written here, not left to the retention sweep. The sweep only
+      // archives jobs old enough to leave the queue, so a job printed a minute
+      // ago produced an empty History screen and looked as though nothing had
+      // been recorded at all.
+      //
+      // The document is deliberately *not* discarded on success: keeping it is
+      // what lets an operator open what actually came out of the printer. The
+      // retention sweep removes it along with the history row.
+      await _queue.recordHistory(completed, printerKey: printer.printerKey);
+
       unawaited(
-        _reporter
-            .reportComplete(
-              completed,
-              printerKey: printer.printerKey,
-              spoolerJobId: result.spoolerJobId,
-              duration: stopwatch.elapsed,
-            )
-            .then((_) => _downloader.discard(completed)),
+        _reporter.reportComplete(
+          completed,
+          printerKey: printer.printerKey,
+          spoolerJobId: result.spoolerJobId,
+          duration: stopwatch.elapsed,
+        ),
       );
 
       return JobOutcome.printed;
@@ -290,11 +299,19 @@ class JobProcessor {
     final attempts = job.attemptCount == 0 ? 1 : job.attemptCount;
     final effective = job.copyWith(attemptCount: attempts);
 
+    // Codes that will never come right however many times they are tried.
+    //
+    // `forbidden` and `conflict` used to be in this set, which is why a job
+    // whose server-side claim had lapsed died on its first attempt and only
+    // printed when an operator hit retry by hand. Both describe the state of the
+    // job at one instant — a claim held elsewhere, a lease being reaped — and
+    // both routinely resolve on their own. A 403 that really is about this agent
+    // still stops immediately, via `retryableOverride`, because
+    // ForbiddenException reports itself unretryable only when the store named an
+    // agent-level code.
     final nonRetryable = <String>{
       ErrorCodes.unauthorized,
-      ErrorCodes.forbidden,
       ErrorCodes.notFound,
-      ErrorCodes.conflict,
       ErrorCodes.unsupportedDocument,
       ErrorCodes.documentUntrustedOrigin,
       ErrorCodes.documentTooLarge,
@@ -357,7 +374,12 @@ class JobProcessor {
 
     if (!willRetry) {
       final latest = await _queue.byId(job.id);
-      if (latest != null) unawaited(_downloader.discard(latest));
+      if (latest != null) {
+        // A job that has given up belongs in History too — that is where an
+        // operator looks to find out what did not print and why.
+        await _queue.recordHistory(latest, printerKey: printerKey);
+        unawaited(_downloader.discard(latest));
+      }
     }
 
     return willRetry ? JobOutcome.retryScheduled : JobOutcome.failedPermanently;

@@ -1,3 +1,6 @@
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import '../../../features/print_queue/domain/print_job.dart';
 import '../database.dart';
 
 /// A condensed record of a finished job. Kept separately from the live queue so
@@ -16,6 +19,8 @@ class PrintHistoryEntry {
     this.errorCode,
     this.errorMessage,
     this.completedAt,
+    this.documentPath,
+    this.documentFilename,
   });
 
   final String id;
@@ -30,6 +35,10 @@ class PrintHistoryEntry {
   final String? errorMessage;
   final DateTime createdAt;
   final DateTime? completedAt;
+
+  /// Where the printed document was kept. Null once retention has removed it.
+  final String? documentPath;
+  final String? documentFilename;
 
   bool get succeeded => status == 'completed';
 
@@ -50,6 +59,8 @@ class PrintHistoryEntry {
         completedAt: row['completed_at'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(row['completed_at']! as int),
+        documentPath: row['document_path'] as String?,
+        documentFilename: row['document_filename'] as String?,
       );
 }
 
@@ -95,6 +106,55 @@ class PrintHistoryDao {
       offset: offset,
     );
     return rows.map(PrintHistoryEntry.fromDatabaseRow).toList(growable: false);
+  }
+
+  /// Writes a finished job into history, replacing any earlier record of it.
+  ///
+  /// Called the moment a job reaches a terminal state rather than only when the
+  /// retention sweep archives it. History previously filled in from the sweep
+  /// alone, which meant a job printed today did not appear until it was thirty
+  /// days old — so a successful print looked like it had left no trace at all.
+  ///
+  /// Keyed on the job id and written with `replace`, so recording at completion
+  /// and again at archive time is idempotent.
+  Future<void> record(
+    PrintJob job, {
+    String? printerKey,
+    String? documentPath,
+  }) async {
+    await _database.db.insert(
+      'print_history',
+      <String, Object?>{
+        'id': job.id,
+        'store_id': job.storeId,
+        'server_job_id': job.serverJobId,
+        'order_reference': job.orderReference,
+        'document_type': job.documentType.name,
+        'printer_key':
+            printerKey ?? job.resolvedPrinterKey ?? job.requestedPrinterKey,
+        'status': job.status.name,
+        'attempt_count': job.attemptCount,
+        'error_code': job.errorCode,
+        'error_message': job.errorMessage,
+        'created_at': job.createdAt.millisecondsSinceEpoch,
+        'completed_at': (job.completedAt ?? DateTime.now())
+            .millisecondsSinceEpoch,
+        'document_path': documentPath ?? job.localFilePath,
+        'document_filename': job.documentFilename,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Clears the stored path for entries whose file has been removed, so the UI
+  /// stops offering to open something that is no longer there.
+  Future<void> forgetDocument(String id) async {
+    await _database.db.update(
+      'print_history',
+      <String, Object?>{'document_path': null},
+      where: 'id = ?',
+      whereArgs: <Object?>[id],
+    );
   }
 
   Future<int> count() async {

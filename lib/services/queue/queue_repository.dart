@@ -188,6 +188,11 @@ class QueueRepository {
     _notify();
   }
 
+  /// Records a finished job in history immediately, so a print that just
+  /// happened is visible in History rather than only after the retention sweep.
+  Future<void> recordHistory(PrintJob job, {String? printerKey}) =>
+      _historyDao.record(job, printerKey: printerKey);
+
   Future<void> markReported(String jobId) async {
     await _dao.markReported(jobId);
     _notify();

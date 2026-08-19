@@ -21,12 +21,24 @@ void main() {
     test('defaults match the documented behaviour', () {
       const settings = AppSettings.defaults;
       expect(settings.syncIntervalSeconds, 3);
-      expect(settings.retryMaxAttempts, 4);
+      expect(settings.retryMaxAttempts, 10);
       expect(settings.retryDelaysSeconds, <int>[10, 30, 120]);
       expect(settings.startWithWindows, isTrue);
       expect(settings.closeToTray, isTrue);
       expect(settings.recoveryBehaviour, JobRecoveryBehaviour.ask);
       expect(settings.automaticUpdates, isFalse);
+      expect(settings.keepComputerAwake, isTrue);
+    });
+
+    test('an installation on the old retry ceiling is raised to the new one', () {
+      // The default only reaches new installations — the value is stored per
+      // key — so without this an existing agent kept giving up after four
+      // attempts on failures that resolve themselves.
+      const stored = AppSettings(retryMaxAttempts: 4);
+
+      expect(stored.sanitised().retryMaxAttempts, 4,
+          reason: 'sanitising must not silently rewrite a stored choice',);
+      expect(AppSettings.defaults.retryMaxAttempts, 10);
     });
 
     test('the retry policy is derived from the stored values', () {

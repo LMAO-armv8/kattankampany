@@ -40,6 +40,7 @@ class SettingsRepository {
           ...AppSettings.defaults.toJson(),
           ...stored,
         }).sanitised();
+        await _raiseRetryCeiling(stored);
       }
     } catch (e, st) {
       _logger?.exception(
@@ -52,6 +53,35 @@ class SettingsRepository {
     }
     _controller.add(_current);
     return _current;
+  }
+
+  /// Raises an installation still carrying the old four-attempt ceiling.
+  ///
+  /// A changed field default only reaches new installations — the value is
+  /// stored per key, so an existing agent kept retrying four times and left jobs
+  /// failed that would have printed on the fifth. Only the exact old default is
+  /// raised, so an operator who deliberately chose a different number keeps it.
+  static const int _previousRetryDefault = 4;
+  static const int _currentRetryDefault = 10;
+
+  Future<void> _raiseRetryCeiling(Map<String, dynamic> stored) async {
+    if (stored['retry_max_attempts'] != _previousRetryDefault) return;
+    _current = _current.copyWith(retryMaxAttempts: _currentRetryDefault);
+    try {
+      await _dao.write('retry_max_attempts', _currentRetryDefault);
+      _logger?.info(
+        LogCategory.storage,
+        'Raised the retry ceiling from $_previousRetryDefault to '
+        '$_currentRetryDefault attempts',
+      );
+    } catch (e, st) {
+      _logger?.exception(
+        LogCategory.storage,
+        'Could not persist the raised retry ceiling',
+        e,
+        st,
+      );
+    }
   }
 
   /// Persists [next] and notifies listeners. Values are clamped first.

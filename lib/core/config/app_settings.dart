@@ -87,7 +87,13 @@ class AppSettings with _$AppSettings {
     @Default(30) int offlineRetryIntervalSeconds,
 
     // ---- Printing ---------------------------------------------------------
-    @Default(4) int retryMaxAttempts,
+    /// How many times a job is attempted before it is left as failed.
+    ///
+    /// Ten rather than a handful because the failures that matter here are
+    /// transient — the store asleep, a claim being reaped, a printer switched
+    /// off for a minute — and each attempt is spaced by the retry delays below,
+    /// so ten attempts spans a long while rather than ten rapid retries.
+    @Default(10) int retryMaxAttempts,
     @Default(<int>[10, 30, 120]) List<int> retryDelaysSeconds,
 
     /// Used when the server does not name a printer.

@@ -12,7 +12,7 @@ class Migration {
   final List<String> statements;
 }
 
-const int latestVersion = 2;
+const int latestVersion = 3;
 
 const List<Migration> migrations = <Migration>[
   Migration(
@@ -195,6 +195,17 @@ const List<Migration> migrations = <Migration>[
       // first thing a support engineer asks for when a network printer stops
       // answering.
       'ALTER TABLE printers ADD COLUMN host TEXT',
+    ],
+  ),
+  Migration(
+    version: 3,
+    statements: <String>[
+      // Where the printed document was kept, so an operator can open what
+      // actually came out of the printer rather than taking the log's word for
+      // it. Null once the retention sweep has removed the file, or for a job
+      // that failed before the document was fetched.
+      'ALTER TABLE print_history ADD COLUMN document_path TEXT',
+      'ALTER TABLE print_history ADD COLUMN document_filename TEXT',
     ],
   ),
 ];
